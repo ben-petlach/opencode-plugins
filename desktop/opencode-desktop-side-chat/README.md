@@ -1,4 +1,4 @@
-# OpenCode Desktop Side Chat v0.2.10
+# OpenCode Desktop Side Chat v0.2.11
 
 Built for OpenCode Desktop 2.3.2. This directory includes the built plugin and its source.
 
@@ -74,3 +74,12 @@ A running side chat now contributes to its main chat's native working indicator 
 The adapter uses the saved `desktopSideChatParent` metadata in the client's root lookup. It does not rewrite server parent links, transcripts, contexts, costs or execution status, and does not add side chats to the native subagent controls. The original lookup is restored on plugin unload. This is a compatibility adapter for OpenCode Desktop 2.3.2; a future activity-provider API should replace it.
 
 Validation: typecheck, production build and all 19 tests pass, including four tests against OpenCode's actual Solid data store for concurrent runs, separate parents, refreshes, descendants, invalid links and cleanup. Tested in a separate desktop profile: the parent activity ring appeared for an existing side chat, stayed active after closing its tab and switching main chats, and cleared after completion. The main draft remained editable.
+
+
+## v0.2.11: native mention sources
+
+The `@` picker now includes the main composer's skills, non-primary visible agents, references and recent root chats alongside files and folders. It uses the same location-scoped SDK sources, hidden-item rules, context group order and fuzzysort 3.1.0 label ranking. Grouped results have compact descriptions and keyboard selection scrolls into view.
+
+Selections remain draft chips until you send. Skills and agents use the native request fields, references use their actual paths and display names, and chat mentions use stable `@session:` tokens. Mention spans refer to the exact sent text. These fields also work with session slash commands. Older string-based file mentions remain readable, and selected context survives closing/reopening side tabs.
+
+Validation: all 23 automated tests, typecheck and production build pass. In a separate desktop profile, compared all 15 Slack skill entries and their order with the native main picker, selected Slack without sending, reopened the saved draft, then verified the submitted message contained the real `slack--slack` skill and its mention span. The isolated test returned `MENTION_QA` without tool calls. No Slack messages were sent.

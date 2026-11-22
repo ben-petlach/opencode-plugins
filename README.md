@@ -5,7 +5,7 @@ The `desktop/` folder contains MIT-licensed plugins built for OpenCode Desktop 2
 | Plugin | Version | What it does |
 | --- | --- | --- |
 | [Follow-up suggestions](desktop/opencode-desktop-followups/) | 0.1.0 | Suggests editable next prompts based on the latest reply. Requires Google Vertex with Gemini 3.1 Flash-Lite configured in OpenCode. |
-| [Side Chat](desktop/opencode-desktop-side-chat/) | 0.2.10 | Opens independent chat tabs with context from the main chat. Share a side transcript back to the main composer as an editable draft. Running side chats mark their main chat as working. |
+| [Side Chat](desktop/opencode-desktop-side-chat/) | 0.2.11 | Opens independent chat tabs with context from the main chat. Share a side transcript back to the main composer as an editable draft. Running side chats mark their main chat as working. |
 
 ## Install
 

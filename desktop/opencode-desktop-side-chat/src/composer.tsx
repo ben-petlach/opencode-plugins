@@ -1,9 +1,10 @@
-import type { CommandInfo, ModelInfo } from "@opencode/client"
+import type { CommandInfo, FileListOutput, ModelInfo } from "@opencode/client"
 import type { Context, MountedSession } from "@opencode/plugin/gui"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import type { Upload } from "./attachments"
+import { mentionKey, mentionLabel, mentionOptions, type Mention } from "./mentions"
 
-type Suggestion = { value: string; label: string; description?: string }
+type Suggestion = { value: string; label: string; description?: string; group?: string; mention?: Mention }
 type Trigger = { kind: "mention" | "command"; start: number; end: number; query: string }
 
 type Props = {
@@ -11,7 +12,7 @@ type Props = {
   session: MountedSession
   editorID: string
   draft: string
-  mentions: readonly string[]
+  mentions: readonly Mention[]
   uploads: readonly Upload[]
   modelLabel: string
   model: ModelInfo | undefined
@@ -21,7 +22,7 @@ type Props = {
   preparing: boolean
   running: boolean
   onDraft: (text: string) => void
-  onMention: (path: string) => void
+  onMention: (mention: Mention) => void
   onRemoveMention: (path: string) => void
   onUpload: (files: readonly File[]) => void
   onRemoveUpload: (id: string) => void
@@ -51,7 +52,7 @@ export function SideComposer(props: Props) {
   const [focused, setFocused] = createSignal(false)
   const [dismissed, setDismissed] = createSignal(false)
   const [selected, setSelected] = createSignal(0)
-  const [matches, setMatches] = createSignal<Suggestion[]>([])
+  const [files, setFiles] = createSignal<Pick<FileListOutput["data"][number], "path" | "type">[]>([])
   const [searching, setSearching] = createSignal(false)
   const [searchError, setSearchError] = createSignal(false)
   let editor: HTMLTextAreaElement | undefined
@@ -63,7 +64,16 @@ export function SideComposer(props: Props) {
   const suggestions = createMemo<Suggestion[]>(() => {
     const active = trigger()
     if (!active) return []
-    if (active.kind === "mention") return matches()
+    if (active.kind === "mention") {
+      const data = props.session.server.data
+      const location = props.session.location ?? { directory: props.session.directory }
+      return mentionOptions(active.query, {
+        references: data.location.reference.list(location) ?? [],
+        skills: data.location.skill.list(location) ?? [],
+        agents: data.location.agent.list(location) ?? [],
+        sessions: data.session.list(), files: files(), currentID: props.session.id, directory: props.session.directory,
+      })
+    }
     const query = active.query.toLowerCase()
     return props.commands
       .filter(command => command.name.toLowerCase().includes(query))
@@ -74,7 +84,7 @@ export function SideComposer(props: Props) {
   createEffect(() => {
     const active = trigger()
     setSelected(0)
-    setMatches([])
+    setFiles([])
     setSearching(active?.kind === "mention")
     setSearchError(false)
     if (active?.kind !== "mention") return
@@ -84,21 +94,27 @@ export function SideComposer(props: Props) {
     const timer = window.setTimeout(async () => {
       const signal = controller.signal
       const location = session.location ?? { directory: session.directory }
-      try {
-        const result = active.query
-          ? await session.server.client.file.find({ location, query: active.query, limit: 12 }, { signal })
-          : await session.server.client.file.list({ location }, { signal })
-        if (!signal.aborted) {
-          setMatches(result.data.slice(0, 12).map(file => ({
-            value: file.path,
-            label: file.path,
-            description: file.type === "directory" ? "Folder" : undefined,
-          })))
-        }
-      } catch {
-        if (!signal.aborted) setSearchError(true)
-      } finally {
-        if (!signal.aborted) setSearching(false)
+      const data = session.server.data
+      const client = session.server.client
+      const results = await Promise.allSettled([
+        data.location.reference.sync(location),
+        data.location.skill.sync(location),
+        data.location.agent.sync(location),
+        (async () => {
+          const result = active.query
+            ? await client.file.find({ location, query: active.query, limit: 12 }, { signal })
+            : await client.file.list({ location }, { signal })
+          if (!signal.aborted) setFiles(result.data.slice(0, 12))
+        })(),
+        (async () => {
+          const result = await client.session.list({ parentID: null, archived: false, limit: 50,
+            ...(active.query ? { search: active.query } : {}) }, { signal })
+          if (!signal.aborted) result.data.forEach(data.session.remember)
+        })(),
+      ])
+      if (!signal.aborted) {
+        setSearchError(results.some(result => result.status === "rejected"))
+        setSearching(false)
       }
     }, 120)
     onCleanup(() => {
@@ -122,7 +138,7 @@ export function SideComposer(props: Props) {
     if (!active) return
     setDismissed(true)
     if (active.kind === "mention") {
-      props.onMention(suggestion.value)
+      if (suggestion.mention) props.onMention(suggestion.mention)
       replace(active.start, active.end, "")
       return
     }
@@ -168,6 +184,7 @@ export function SideComposer(props: Props) {
       event.stopPropagation()
       const step = event.key === "ArrowDown" ? 1 : -1
       setSelected(index => (index + step + options.length) % options.length)
+      queueMicrotask(() => document.getElementById(`${listID()}-${selected()}`)?.scrollIntoView({ block: "nearest" }))
       return
     }
     if (menu && ["Enter", "Tab"].includes(event.key) && !event.shiftKey && options.length) {
@@ -206,10 +223,13 @@ export function SideComposer(props: Props) {
   return (
     <form class="oc-side-compose" onSubmit={event => { event.preventDefault(); props.onSend() }}>
       <Show when={trigger()}>
-        <div class="oc-side-suggestions" id={listID()} role="listbox" aria-label={trigger()?.kind === "mention" ? "Mention files and folders" : "Side chat commands"}>
+        <div class="oc-side-suggestions" id={listID()} role="listbox" aria-label={trigger()?.kind === "mention" ? "Mention context" : "Side chat commands"}>
           <For each={suggestions()} fallback={
-            <p role="status">{searching() ? "Searching…" : searchError() ? "File search failed." : "No matches"}</p>
-          }>{(option, index) => (
+            <p role="status">{searching() ? "Searching…" : searchError() ? "Context search failed." : "No matches"}</p>
+          }>{(option, index) => <>
+            <Show when={option.group && option.group !== suggestions()[index() - 1]?.group}>
+              <div class="oc-side-suggestion-group">{option.group}</div>
+            </Show>
             <button
               type="button"
               id={`${listID()}-${index()}`}
@@ -222,16 +242,16 @@ export function SideComposer(props: Props) {
               <span>{option.label}</span>
               <Show when={option.description}><small>{option.description}</small></Show>
             </button>
-          )}</For>
+          </>}</For>
         </div>
       </Show>
 
       <Show when={props.mentions.length || props.uploads.length}>
         <div class="oc-side-chips" aria-label="Draft attachments">
-          <For each={props.mentions}>{path => (
-            <button type="button" class="oc-side-chip" title={path} aria-label={`Remove mention ${path}`} disabled={props.preparing}
-              onClick={() => props.onRemoveMention(path)}>
-              <span>@{path}</span><ui.Icon name="close" size="small" />
+          <For each={props.mentions}>{mention => (
+            <button type="button" class="oc-side-chip" title={typeof mention === "string" ? mention : mention.value} aria-label={`Remove mention ${mentionLabel(mention)}`} disabled={props.preparing}
+              onClick={() => props.onRemoveMention(mentionKey(mention))}>
+              <span>@{mentionLabel(mention)}</span><ui.Icon name="close" size="small" />
             </button>
           )}</For>
           <For each={props.uploads}>{upload => <Attachment upload={upload} />}</For>

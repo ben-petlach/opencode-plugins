@@ -26,12 +26,12 @@ function readDataUrl(file: File) {
 
 export async function prepareFiles(
   session: MountedSession,
-  mentions: readonly string[],
+  mentions: readonly { path: string; name: string; mention?: { start: number; end: number; text: string } }[],
   uploads: readonly Upload[],
   modalities: readonly string[],
   signal: AbortSignal,
 ) {
-  const files = mentions.map(path => pathAttachment(session.directory, path))
+  const files = mentions.map(item => ({ ...pathAttachment(session.directory, item.path), name: item.name, ...(item.mention ? { mention: item.mention } : {}) }))
   const client = session.server.client
   let tmp: string | undefined
   let inlineBytes = 0

@@ -17,6 +17,7 @@ import { modelOptions, parseModelPreferences } from "./models"
 import { installSelectionAction } from "./selection-action"
 import { quoteDraft } from "./selection-text"
 import { installSideChatActivity } from "./activity"
+import { ContextMention, mentionKey, mentionPayload } from "./mentions"
 
 const ModelPreferences = Ipc.define({
   id: "opencode-desktop-side-chat.models",
@@ -28,7 +29,7 @@ const LegacyTurn = Schema.Struct({ question: Schema.String, answer: Schema.Strin
 const Thread = Schema.Struct({
   turns: Schema.Array(LegacyTurn),
   draft: Schema.String,
-  mentions: Schema.optional(Schema.Array(Schema.String)),
+  mentions: Schema.optional(Schema.Array(Schema.Union([Schema.String, ContextMention]))),
   sessionID: Schema.optional(Schema.String),
   model: Schema.optional(Model),
   updates: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.String, afterID: Schema.optional(Schema.String), time: Schema.Number }))),
@@ -496,7 +497,8 @@ export default Plugin.define({
         void perform(key, "sending", async () => {
           scrollToLatest()
           const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(120_000)])
-          const files = await prepareFiles(session, thread.mentions ?? [], attached, modalities, signal)
+          const context = mentionPayload(slash ? slash[2] ?? "" : text, thread.mentions ?? [])
+          const files = await prepareFiles(session, context.files, attached, modalities, signal)
           const fallback = selected ? undefined : (await client.model.default({ location: location() }, { signal })).data
           const effectiveModel = selected ?? (fallback && { providerID: fallback.providerID, id: fallback.id })
           if (!effectiveModel) throw new Error("Choose an available side chat model.")
@@ -510,15 +512,16 @@ export default Plugin.define({
             if (files.length) throw new Error("Shell commands cannot include attachments.")
             await client.session.shell({ sessionID: id, command: text.slice(1).trim() }, { signal })
           } else if (slash) {
-            await client.session.command({ sessionID: id, name: slash[1], text: slash[2] ?? "", files }, { signal })
+            await client.session.command({ sessionID: id, name: slash[1], text: context.text, files, agents: context.agents, skills: context.skills }, { signal })
           } else {
-            await data.session.prompt({ sessionID: id, text, files })
+            await data.session.prompt({ sessionID: id, text: context.text, files, agents: context.agents, skills: context.skills })
           }
           const sent = new Set(attached.map(file => file.id))
           updateUploads(key, remaining => remaining.filter(file => !sent.has(file.id)))
           saved.update(current => {
             if (current.draft === thread.draft) current.draft = ""
-            current.mentions = current.mentions?.filter(path => !thread.mentions?.includes(path))
+            const sentMentions = new Set((thread.mentions ?? []).map(mentionKey))
+            current.mentions = current.mentions?.filter(item => !sentMentions.has(mentionKey(item)))
           })
           setLastSubmitted(Date.now())
         })
@@ -670,8 +673,10 @@ export default Plugin.define({
             preparing={activity() === "sending"}
             running={running()}
             onDraft={value => saved.update(thread => { thread.draft = value })}
-            onMention={path => saved.update(thread => { thread.mentions = [...new Set([...(thread.mentions ?? []), path])] })}
-            onRemoveMention={path => saved.update(thread => { thread.mentions = thread.mentions?.filter(item => item !== path) })}
+            onMention={mention => saved.update(thread => {
+              if (!thread.mentions?.some(item => mentionKey(item) === mentionKey(mention))) thread.mentions = [...(thread.mentions ?? []), mention]
+            })}
+            onRemoveMention={key => saved.update(thread => { thread.mentions = thread.mentions?.filter(item => mentionKey(item) !== key) })}
             onUpload={addUploads}
             onRemoveUpload={id => updateUploads(key, files => files.filter(file => file.id !== id))}
             onModel={() => void chooseModel().catch(error => report("Couldn’t choose a model", error))}

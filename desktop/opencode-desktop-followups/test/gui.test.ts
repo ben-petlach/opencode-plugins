@@ -23,16 +23,29 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
   let next = JSON.stringify({ follow_ups: ["Can we use staging?", primaryText, "Could you show the trace?"], primary: 1 })
   let syncTooltip: (() => void) | undefined
   let accessibleName = ""
+  let shownTooltip: { textContent: string } | undefined
+  const tooltipText = () => shownTooltip?.textContent
+  const listeners = new Map<string, () => void>()
   const primaryButton = {
-    title: "", textContent: primaryText,
+    textContent: primaryText,
     getAttribute: (name: string) => name === "aria-label" ? accessibleName : null,
-    removeAttribute(name: string) { if (name === "title") this.title = "" },
+    getBoundingClientRect: () => ({ left: 680, top: 350, bottom: 380 }),
+    matches: () => false,
+    addEventListener: (name: string, callback: () => void) => listeners.set(name, callback),
+    removeEventListener: (name: string) => listeners.delete(name),
   }
-  const menuButton = { ...primaryButton, textContent: "Suggested next prompts" }
+  const menuButton = { ...primaryButton, textContent: "Suggested next prompts", addEventListener: () => assert.fail("Menu gains no tooltip") }
   const document = {
-    body: {}, visibilityState: "visible", addEventListener() {}, removeEventListener() {},
+    body: { append: (element: { textContent: string }) => { shownTooltip = element } },
+    visibilityState: "visible", addEventListener() {}, removeEventListener() {},
     querySelectorAll: () => [menuButton, primaryButton],
+    createElement: () => ({
+      textContent: "", dataset: {}, style: {}, setAttribute() {},
+      getBoundingClientRect: () => ({ width: 360, height: 42 }),
+      remove() { shownTooltip = undefined },
+    }),
   }
+  const window = { innerWidth: 800, addEventListener() {}, removeEventListener() {} }
   class MutationObserver {
     constructor(private callback: () => void) {}
     observe() { syncTooltip = this.callback }
@@ -59,7 +72,7 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
   const screen = { composer }
   const exports: any = {}
   vm.runInNewContext(readFileSync(new URL("../dist/gui-experimental.cjs", import.meta.url), "utf8"), {
-    exports, require: (id: string) => modules[id], document, window: document, console,
+    exports, require: (id: string) => modules[id], document, window, console,
     AbortController, MutationObserver, setTimeout, clearTimeout, queueMicrotask,
   })
   let dispose!: () => void
@@ -96,8 +109,12 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
     assert.equal(menu().label, "Suggested next prompts")
     accessibleName = primary().title
     syncTooltip?.()
-    assert.equal(primaryButton.title, primaryText, "Native tooltip keeps the entire prompt")
-    assert.equal(menuButton.title, "", "Menu button keeps its own tooltip behavior")
+    assert.equal(shownTooltip, undefined)
+    listeners.get("pointerenter")?.()
+    assert.equal(tooltipText(), primaryText, "The button itself reveals the full prompt")
+    listeners.get("pointerleave")?.()
+    assert.equal(shownTooltip, undefined)
+    listeners.get("pointerenter")?.()
     assert.equal(menu().rows.length, 2, "Incompatible choices are filtered, leaving the match and dismissal")
     assert.equal(primary().run, undefined)
     assert.equal(menu().rows[0].run, undefined)
@@ -107,7 +124,8 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
     assert.equal(menu(), undefined)
     assert.equal(primary(), undefined)
     await flush()
-    assert.equal(primaryButton.title, "", "Hidden suggestions remove the tooltip")
+    assert.equal(shownTooltip, undefined, "Hidden suggestions remove the tooltip")
+    assert.equal(listeners.size, 0, "Removed pills lose their hover listeners")
     assert.equal(syncTooltip, undefined, "Hidden suggestions stop observing the host")
     setText("CAN Y")
     assert.equal(primary().label, primaryText)

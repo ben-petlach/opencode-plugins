@@ -10,6 +10,59 @@ function latestMessageID(session: MountedSession) {
     ?.findLast((message) => message.type === "assistant" || message.type === "user")?.id
 }
 
+function attachTooltip(button: HTMLButtonElement, text: string) {
+  const tooltip = document.createElement("div")
+  // The button's accessible name already includes the full suggestion.
+  tooltip.setAttribute("aria-hidden", "true")
+  tooltip.dataset.followupTooltip = ""
+  tooltip.textContent = text
+  Object.assign(tooltip.style, {
+    position: "fixed", zIndex: "50", pointerEvents: "none",
+    width: "max-content", maxWidth: "min(360px, calc(100vw - 16px))", boxSizing: "border-box",
+    padding: "8px 10px", borderRadius: "8px", background: "Canvas", color: "CanvasText",
+    boxShadow: "0 2px 12px #0003, 0 0 0 1px #8885", fontSize: "13px", lineHeight: "1.4",
+    whiteSpace: "normal", overflowWrap: "anywhere",
+  })
+  const position = () => {
+    const anchor = button.getBoundingClientRect()
+    const { width, height } = tooltip.getBoundingClientRect()
+    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8))
+    const above = anchor.top - height - 6
+    tooltip.style.left = `${left}px`
+    tooltip.style.top = `${above >= 8 ? above : anchor.bottom + 6}px`
+  }
+  const dismiss = () => {
+    tooltip.remove()
+    document.removeEventListener("keydown", dismissOnEscape)
+    window.removeEventListener("resize", position)
+  }
+  const dismissOnEscape = (event: KeyboardEvent) => {
+    if (event.key === "Escape") dismiss()
+  }
+  const reveal = () => {
+    document.body.append(tooltip)
+    position()
+    document.addEventListener("keydown", dismissOnEscape)
+    window.addEventListener("resize", position)
+  }
+  const revealOnFocus = () => {
+    if (button.matches(":focus-visible")) reveal()
+  }
+  button.addEventListener("pointerenter", reveal)
+  button.addEventListener("pointerleave", dismiss)
+  button.addEventListener("focus", revealOnFocus)
+  button.addEventListener("blur", dismiss)
+  if (button.matches(":hover, :focus-visible")) reveal()
+
+  return () => {
+    button.removeEventListener("pointerenter", reveal)
+    button.removeEventListener("pointerleave", dismiss)
+    button.removeEventListener("focus", revealOnFocus)
+    button.removeEventListener("blur", dismiss)
+    dismiss()
+  }
+}
+
 export default Plugin.define({
   stores: { prefs: Store.global(Schema.Struct({ enabled: Schema.Boolean }), { enabled: true }) },
   setup(ctx) {
@@ -142,25 +195,23 @@ export default Plugin.define({
       const view = session && screen && showPrimary({ session, screen })
       if (!view) return
 
-      // Desktop 2.3.2 maps ComposerPillView.title to aria-label. Add a native hover tooltip to the rendered button.
+      // The 2.3.2 pill SDK exposes its accessible label but no tooltip hook.
       let button: HTMLButtonElement | undefined
-      const removeTooltip = () => {
-        if (button?.title === view.label) button.removeAttribute("title")
-      }
+      let removeTooltip: (() => void) | undefined
       const syncTooltip = () => {
         const match = Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-slot="session-plugin-pill"]:not([aria-haspopup])'))
           .find((pill) => pill.getAttribute("aria-label") === view.title && pill.textContent === view.label)
         if (match === button) return
-        removeTooltip()
+        removeTooltip?.()
         button = match
-        if (button) button.title = view.label
+        removeTooltip = button && attachTooltip(button, view.label)
       }
       const observer = new MutationObserver(syncTooltip)
       observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-label"] })
       syncTooltip()
       onCleanup(() => {
         observer.disconnect()
-        removeTooltip()
+        removeTooltip?.()
       })
     })
     ctx.add(ComposerPill, {

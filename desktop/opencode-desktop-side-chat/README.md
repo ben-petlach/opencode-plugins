@@ -1,14 +1,14 @@
-# OpenCode Desktop Side Chat v0.2.9
+# OpenCode Desktop Side Chat v0.2.10
 
 Built for OpenCode Desktop 2.3.2. This directory includes the built plugin and its source.
 
 1. Clone this repository or extract its ZIP to a permanent folder.
-2. Open your global OpenCode config at `~/.config/opencode/opencode.json` or its JSONC equivalent. Add the absolute path to the `desktop/opencode-desktop-side-chat` folder to the existing `plugins` array. The path should point to the folder containing `package.json`. Replace any previous Side Chat plugin path with this version so only one copy is configured.
+2. Open your global OpenCode config at `~/.config/opencode/opencode.json` or its JSONC equivalent. Add the absolute path to this plugin folder (`desktop/opencode-desktop-side-chat` in a repository clone) to the existing `plugins` array. The path should point to the folder containing `package.json`. Replace any previous Side Chat plugin path with this version so only one copy is configured.
 3. Reopen OpenCode Desktop. In an existing chat, type `/sidechat`.
 
 The first side message takes a snapshot of the main chat. Click **Update from main** to refresh that snapshot. Use **Share with agent** to put the side conversation in the main composer for review before sending.
 
-To rebuild from source with Node.js 22, run `npm ci --legacy-peer-deps --ignore-scripts`, `npm run check`, and `npm run build` in this plugin folder. Run the tests with `node --experimental-strip-types --test test/*.test.ts`.
+To rebuild from source with Node.js 22, run `npm ci --legacy-peer-deps --ignore-scripts`, `npm run check`, and `npm run build` in this plugin folder. Run the tests with `node --conditions=browser --experimental-strip-types --test test/*.test.ts`.
 
 ## Local model-picker update
 
@@ -65,3 +65,12 @@ Validated in an isolated desktop instance with an existing main draft and a sepa
 Polling now updates assistant content in place instead of remounting Markdown every 500 ms. This prevents earlier replies from briefly collapsing and resetting the transcript to the top. New output follows the bottom while you are near it; scrolling up pauses following until you return to the bottom or send another prompt. Following uses actual content size, including asynchronously rendered Markdown. Submission requests following once at the start, so a long-running shell request cannot override a later manual scroll when it finishes.
 
 Validation: typecheck, production build, and all 15 automated regression tests pass. In an isolated OpenCode Desktop 2.3.2 profile, reproduced the original repeated top reset on v0.2.8, then checked the fix with long replies, repeated polling, manual scrolling, new submissions, and shell execution.
+
+
+## v0.2.10: parent chat working status
+
+A running side chat now contributes to its main chat's native working indicator in the tab strip, session lists and working views. It keeps working when another side chat or the main chat is still running, including when the side tab is closed or another main chat is selected. Existing side-chat sessions work without recreating them.
+
+The adapter uses the saved `desktopSideChatParent` metadata in the client's root lookup. It does not rewrite server parent links, transcripts, contexts, costs or execution status, and does not add side chats to the native subagent controls. The original lookup is restored on plugin unload. This is a compatibility adapter for OpenCode Desktop 2.3.2; a future activity-provider API should replace it.
+
+Validation: typecheck, production build and all 19 tests pass, including four tests against OpenCode's actual Solid data store for concurrent runs, separate parents, refreshes, descendants, invalid links and cleanup. Tested in a separate desktop profile: the parent activity ring appeared for an existing side chat, stayed active after closing its tab and switching main chats, and cleared after completion. The main draft remained editable.

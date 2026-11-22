@@ -16,6 +16,7 @@ import styles from "./panel.css?inline"
 import { modelOptions, parseModelPreferences } from "./models"
 import { installSelectionAction } from "./selection-action"
 import { quoteDraft } from "./selection-text"
+import { installSideChatActivity } from "./activity"
 
 const ModelPreferences = Ipc.define({
   id: "opencode-desktop-side-chat.models",
@@ -96,6 +97,12 @@ export default Plugin.define({
     chats: Store.session(Catalog, { items: [{ id: "main", title: "Side chat 1" }], active: "main" }),
   },
   setup(ctx) {
+    createEffect(() => {
+      for (const id of ctx.servers.list()) {
+        const server = ctx.servers.get(id)
+        if (server) onCleanup(installSideChatActivity(server.data))
+      }
+    })
     const [activities, setActivities] = createSignal(new Map<string, Activity>())
     const [uploads, setUploads] = createSignal(new Map<string, Upload[]>())
     const tabs = new Map<string, PanelTab>()

@@ -122,20 +122,46 @@ export default Plugin.define({
       composer.focus()
     }
 
-    ctx.add(ComposerPill, {
-      id: "primary-suggestion",
-      show(input) {
-        const primary = currentPrediction(input)?.primary
-        const draft = input.screen.composer.text()
-        if (!primary || !matchesDraft(primary, draft)) return
-        if (draft) return { label: primary, title: `${primary} · Clear the draft to insert` }
-        const shortcut = ctx.keybinds.keybind(`${ctx.id}.accept`).join("+")
-        return {
-          label: primary,
-          title: shortcut ? `${primary} · ${shortcut} in the prompt` : undefined,
-          run: () => { accept(input, primary) },
-        }
-      },
+    const showPrimary = (input: ComposerPillProps) => {
+      const primary = currentPrediction(input)?.primary
+      const draft = input.screen.composer.text()
+      if (!primary || !matchesDraft(primary, draft)) return
+      if (draft) return { label: primary, title: `${primary} · Clear the draft to insert` }
+      const shortcut = ctx.keybinds.keybind(`${ctx.id}.accept`).join("+")
+      return {
+        label: primary,
+        title: shortcut ? `${primary} · ${shortcut} in the prompt` : primary,
+        run: () => { accept(input, primary) },
+      }
+    }
+    ctx.add(ComposerPill, { id: "primary-suggestion", show: showPrimary })
+
+    createEffect(() => {
+      const session = ctx.sessions.current()
+      const screen = ctx.screen.current()
+      const view = session && screen && showPrimary({ session, screen })
+      if (!view) return
+
+      // Desktop 2.3.2 maps ComposerPillView.title to aria-label. Add a native hover tooltip to the rendered button.
+      let button: HTMLButtonElement | undefined
+      const removeTooltip = () => {
+        if (button?.title === view.label) button.removeAttribute("title")
+      }
+      const syncTooltip = () => {
+        const match = Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-slot="session-plugin-pill"]:not([aria-haspopup])'))
+          .find((pill) => pill.getAttribute("aria-label") === view.title && pill.textContent === view.label)
+        if (match === button) return
+        removeTooltip()
+        button = match
+        if (button) button.title = view.label
+      }
+      const observer = new MutationObserver(syncTooltip)
+      observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-label"] })
+      syncTooltip()
+      onCleanup(() => {
+        observer.disconnect()
+        removeTooltip()
+      })
     })
     ctx.add(ComposerPill, {
       id: "suggestions",

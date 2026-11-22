@@ -19,8 +19,25 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
   let messageID = "assistant-1"
   let focused = false
   let stale: ((result: { text: string }) => void) | undefined
-  let next = '{"follow_ups":["Can we use staging?","Can you check the logs?","Could you show the trace?"],"primary":1}'
-  const document = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} }
+  const primaryText = "Can you check the logs from the last deployment and identify which request is causing the timeouts?"
+  let next = JSON.stringify({ follow_ups: ["Can we use staging?", primaryText, "Could you show the trace?"], primary: 1 })
+  let syncTooltip: (() => void) | undefined
+  let accessibleName = ""
+  const primaryButton = {
+    title: "", textContent: primaryText,
+    getAttribute: (name: string) => name === "aria-label" ? accessibleName : null,
+    removeAttribute(name: string) { if (name === "title") this.title = "" },
+  }
+  const menuButton = { ...primaryButton, textContent: "Suggested next prompts" }
+  const document = {
+    body: {}, visibilityState: "visible", addEventListener() {}, removeEventListener() {},
+    querySelectorAll: () => [menuButton, primaryButton],
+  }
+  class MutationObserver {
+    constructor(private callback: () => void) {}
+    observe() { syncTooltip = this.callback }
+    disconnect() { syncTooltip = undefined }
+  }
   const data = {
     on: (name: string, callback: any) => { handlers.set(name, callback); return () => handlers.delete(name) },
     session: {
@@ -43,7 +60,7 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
   const exports: any = {}
   vm.runInNewContext(readFileSync(new URL("../dist/gui-experimental.cjs", import.meta.url), "utf8"), {
     exports, require: (id: string) => modules[id], document, window: document, console,
-    AbortController, setTimeout, clearTimeout, queueMicrotask,
+    AbortController, MutationObserver, setTimeout, clearTimeout, queueMicrotask,
   })
   let dispose!: () => void
   createRoot((cleanup) => {
@@ -75,8 +92,12 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
     assert.equal(calls, 1, "Typing never blocks generation")
     const primary = () => show("primary-suggestion")
     const menu = () => show("suggestions")
-    assert.equal(primary().label, "Can you check the logs?")
+    assert.equal(primary().label, primaryText)
     assert.equal(menu().label, "Suggested next prompts")
+    accessibleName = primary().title
+    syncTooltip?.()
+    assert.equal(primaryButton.title, primaryText, "Native tooltip keeps the entire prompt")
+    assert.equal(menuButton.title, "", "Menu button keeps its own tooltip behavior")
     assert.equal(menu().rows.length, 2, "Incompatible choices are filtered, leaving the match and dismissal")
     assert.equal(primary().run, undefined)
     assert.equal(menu().rows[0].run, undefined)
@@ -85,20 +106,23 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
     setText("can they")
     assert.equal(menu(), undefined)
     assert.equal(primary(), undefined)
+    await flush()
+    assert.equal(primaryButton.title, "", "Hidden suggestions remove the tooltip")
+    assert.equal(syncTooltip, undefined, "Hidden suggestions stop observing the host")
     setText("CAN Y")
-    assert.equal(primary().label, "Can you check the logs?")
+    assert.equal(primary().label, primaryText)
     assert.equal(calls, 1, "Erasing back to a match reuses the prediction")
     setText("")
     assert.equal(menu().rows[0].label, primary().label)
     assert.match(primary().title, /Tab in the prompt/)
     assert.equal(command("accept").run(), false, "Do not take Tab outside the composer")
     primary().run()
-    assert.equal(text(), "Can you check the logs?")
+    assert.equal(text(), primaryText)
     assert(focused)
     assert.equal(primary(), undefined)
     setText("")
     assert.equal(command("accept").run(), undefined)
-    assert.equal(text(), "Can you check the logs?")
+    assert.equal(text(), primaryText)
     setText("")
     menu().rows.at(-1).run()
     complete("1")

@@ -1,0 +1,4 @@
+Suggestion generation and parsing adapted from mv2a (Tiago Leao), OpenCode PR #57137:
+https://github.com/anomalyco/opencode/pull/57137
+Original commit: 5ae76eacfefebb0a0626d9bc164591f1cf4ef73b
+Original work licensed under MIT; see LICENSE.

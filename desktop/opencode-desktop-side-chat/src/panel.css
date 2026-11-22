@@ -1,0 +1,305 @@
+.oc-side-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--background-base);
+  color: var(--text-strong);
+}
+.oc-side-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  gap: 12px;
+  min-height: 40px;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--border-weak-base, var(--border-base));
+  font-weight: 500;
+}
+.oc-side-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 18px 0;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+}
+.oc-side-empty {
+  margin: 20px auto;
+  text-align: center;
+  color: var(--text-weak);
+}
+.oc-side-message {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto 16px;
+}
+.oc-side-message-user {
+  width: fit-content;
+  max-width: min(680px, 91%);
+  margin-right: 0;
+  border: 1px solid var(--border-weak-base, var(--border-base));
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: var(--surface-raised-base, var(--surface-base));
+  white-space: pre-wrap;
+}
+.oc-side-message-user p {
+  margin: 0;
+}
+.oc-side-message-user .oc-side-chips {
+  margin-bottom: 5px;
+}
+.oc-side-message-assistant {
+  padding: 0 1px;
+}
+.oc-side-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-weak);
+  margin-bottom: 12px;
+}
+.oc-side-error {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-critical-base, var(--border-base));
+  color: var(--text-critical, var(--text-strong));
+  margin-bottom: 12px;
+}
+.oc-side-request {
+  align-self: center;
+  width: calc(100% - 32px);
+  max-width: 680px;
+  margin: 0 16px 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--surface-raised-base, var(--surface-base));
+}
+.oc-side-request > div {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.oc-side-request-detail {
+  color: var(--text-weak);
+  overflow-wrap: anywhere;
+}
+.oc-side-compose {
+  position: relative;
+  align-self: center;
+  width: calc(100% - 32px);
+  max-width: 680px;
+  margin: 8px 16px 14px;
+  border: 1px solid var(--border-base);
+  border-radius: 10px;
+  background: var(--surface-raised-base, var(--surface-base));
+  box-shadow: var(--shadow-xs, 0 1px 4px #0001);
+}
+.oc-side-compose:focus-within {
+  border-color: var(--border-interactive-base, var(--border-base));
+}
+.oc-side-compose textarea {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  max-height: 160px;
+  border: 0;
+  resize: vertical;
+  outline: none;
+  padding: 10px 12px 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.oc-side-compose textarea::placeholder {
+  color: var(--text-weak);
+}
+.oc-side-toolbar,
+.oc-side-tools {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.oc-side-toolbar {
+  justify-content: space-between;
+  padding: 3px 7px 7px;
+}
+.oc-side-tools {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.oc-side-model {
+  min-width: 0;
+  max-width: 100%;
+}
+.oc-side-model button {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+.oc-side-text-button,
+.oc-side-send {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.oc-side-text-button {
+  color: var(--text-weak);
+}
+.oc-side-text-button:hover:enabled,
+.oc-side-chip:hover:enabled {
+  background: var(--surface-base-hover, var(--surface-base));
+  color: var(--text-strong);
+}
+.oc-side-send {
+  flex-shrink: 0;
+  width: 27px;
+  height: 27px;
+  color: var(--background-base);
+  background: var(--text-strong);
+}
+.oc-side-text-button:disabled,
+.oc-side-send:disabled {
+  opacity: .4;
+}
+.oc-side-chips {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.oc-side-compose > .oc-side-chips {
+  padding: 8px 10px 0;
+}
+.oc-side-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--border-weak-base, var(--border-base));
+  border-radius: 5px;
+  color: var(--text-weak);
+  font-size: 11px;
+}
+.oc-side-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-side-suggestions {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 1;
+  padding: 4px;
+  max-height: min(280px, 40vh);
+  overflow: auto;
+  background: var(--background-base);
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm, 0 3px 12px #0002);
+}
+.oc-side-suggestions button {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+.oc-side-suggestions button[aria-selected="true"] {
+  background: var(--surface-base-hover, var(--surface-base));
+}
+.oc-side-suggestions small,
+.oc-side-suggestions p {
+  color: var(--text-weak);
+}
+.oc-side-suggestions p {
+  padding: 6px 8px;
+}
+/* Main-chat geometry, colors and interaction states, scoped to the plugin. */
+.oc-side-chat {
+  background: var(--v2-background-bg-base, var(--background-base));
+  color: var(--v2-text-text-base, var(--text-strong));
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-base, 14px);
+  line-height: 1.6;
+}
+.oc-side-transcript { padding: 20px 24px 8px; }
+.oc-side-transcript, .oc-side-message, .oc-side-prompt, .oc-side-message p, .oc-side-message pre {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
+}
+.oc-side-message { margin-bottom: 24px; }
+.oc-side-message-user {
+  width: 100%; max-width: 100%; margin-right: auto;
+  border: 0; border-radius: 0; padding: 0; background: transparent;
+  display: flex; flex-direction: column; align-items: flex-end;
+}
+.oc-side-prompt {
+  max-width: min(82%, 64ch); padding: 8px 12px; border-radius: 10px;
+  background: var(--v2-background-bg-layer-02, var(--surface-raised-base));
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.oc-side-message-actions {
+  display: flex; align-items: center; gap: 6px; min-height: 24px; margin-top: 8px;
+  opacity: 0; transition: opacity 100ms ease-out; cursor: default;
+}
+.oc-side-message-user .oc-side-message-actions { justify-content: flex-end; width: 100%; }
+.oc-side-message:hover .oc-side-message-actions,
+.oc-side-message:focus-within .oc-side-message-actions { opacity: 1; }
+.oc-side-meta { color: var(--v2-text-text-faint, var(--text-weak)); font-size: 12px; min-width: 0; }
+.oc-side-message-user .oc-side-meta:empty { display: none; }
+.oc-side-message-actions [data-component] { cursor: pointer; }
+.oc-side-disclosure { margin: 8px 0; color: var(--v2-text-text-muted, var(--text-weak)); }
+.oc-side-disclosure summary { cursor: pointer; font-size: 13px; }
+.oc-side-disclosure pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; font-size: 12px; }
+.oc-side-details { display: grid; grid-template-columns: max-content 1fr; gap: 8px 20px; padding: 8px 0; }
+.oc-side-details dt { color: var(--v2-text-text-muted, var(--text-weak)); }
+.oc-side-details dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
+.oc-side-compose {
+  border-radius: 16px;
+  background: var(--v2-background-bg-layer-01, var(--surface-raised-base));
+  border-color: var(--v2-border-border-base, var(--border-base));
+  box-shadow: var(--shadow-sm, 0 2px 6px #0001);
+}
+.oc-side-compose textarea { resize: none; min-height: 64px; max-height: 200px; padding: 14px 16px 8px; line-height: 1.6; }
+.oc-side-toolbar { padding: 4px 10px 10px; gap: 8px; }
+.oc-side-tools { flex: 1; flex-wrap: nowrap; gap: 2px; }
+.oc-side-model { overflow: hidden; }
+.oc-side-model button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oc-side-send { width: 28px; height: 28px; border-radius: 8px; }
+.oc-side-chip img { width: 40px; height: 40px; border-radius: 5px; object-fit: cover; }
+@media (hover: none) { .oc-side-message-actions { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .oc-side-message-actions { transition: none; } }
+.oc-side-model button, .oc-side-tools > button {
+  font-weight: 400;
+  color: var(--v2-text-text-muted, var(--text-weak));
+}
+.oc-side-shell { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; font-size: 12px; }
+.oc-side-images { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.oc-side-images img { max-width: 220px; max-height: 180px; object-fit: contain; border-radius: 8px; }
+.oc-side-header-compact { justify-content: flex-end; min-height: 32px; gap: 4px; padding: 2px 12px; border-bottom: 0; }
+.oc-side-executions { margin: 8px 0 20px; font-size: 13px; color: var(--v2-text-text-muted, var(--text-weak)); }
+.oc-side-executions > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; width: fit-content; list-style: none; }
+.oc-side-executions > summary::after { content: "⌄"; font-size: 12px; }
+.oc-side-executions[open] > summary::after { content: "⌃"; }
+.oc-side-execution-list { border-left: 1px solid var(--v2-border-border-base, var(--border-base)); margin: 10px 0 0 10px; padding-left: 12px; }
+.oc-side-execution { margin: 8px 0; color: var(--v2-text-text-base, var(--text-strong)); }
+.oc-side-execution summary { cursor: pointer; }
+.oc-side-execution > summary span, .oc-side-execution-live { margin-left: 8px; color: var(--v2-text-text-faint, var(--text-weak)); font-size: 12px; }
+.oc-side-execution-data { margin: 4px 0 4px 8px; color: var(--v2-text-text-muted, var(--text-weak)); }
+.oc-side-execution pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font-size: 12px; }
+.oc-side-context-update { display: flex; align-items: center; gap: 8px; margin: 18px 0; font-size: 12px; color: var(--v2-text-text-faint, var(--text-weak)); }
+.oc-side-context-update::before, .oc-side-context-update::after { content: ""; flex: 1; border-top: 1px solid var(--v2-border-border-base, var(--border-base)); }
+.oc-side-header-spacer { flex: 1; }

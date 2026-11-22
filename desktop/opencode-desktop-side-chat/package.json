@@ -1,0 +1,22 @@
+{
+  "name": "opencode-desktop-side-chat",
+  "version": "0.2.9",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./gui-experimental": "./dist/gui-experimental.cjs"
+  },
+  "scripts": {
+    "build": "vite build",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.3.2",
+    "effect": "4.1.0",
+    "solid-js": "1.9.20",
+    "typescript": "5.9.3",
+    "vite": "7.3.8",
+    "vite-plugin-solid": "2.11.17"
+  }
+}

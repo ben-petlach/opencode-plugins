@@ -1,4 +1,4 @@
-# OpenCode Desktop Side Chat v0.2.13
+# OpenCode Desktop Side Chat v0.2.14
 
 Built for OpenCode Desktop 2.3.2. This directory includes the built plugin and its source.
 
@@ -105,3 +105,16 @@ Snapshots also fetch native child sessions recursively, including active and arc
 Tool inputs are limited to 2,000 characters, outputs to 4,000 per call, and errors to 1,000. Large fields retain their beginning and end with explicit truncation markers. File outputs include names, MIME types and references; inline data/blob payloads are omitted. Main and descendant records share the existing 30,000-character content budget and favor recent records. This remains an explicit snapshot, with no automatic live synchronization. Visible transcripts and sharing behavior are unchanged.
 
 Validation: all 36 automated tests pass, plus TypeScript check and production build. In a separate Desktop 2.3.2 profile, executed two real main-chat shell tool calls. Verified initial capture included actual output, later main activity left that snapshot unchanged, and **Update from main** captured both calls with an inline marker. Also executed real child and nested-child shell calls, and verified capture included both outputs, origin labels and a real delegation error. QA’s subagent depth setting was raised only in the isolated profile; the active installation’s settings were preserved. Automated tests cover pagination, archived children, repeated/cyclic links, descendant limits, error propagation, running/streaming records, file outputs and truncation.
+
+## v0.2.14: live main-chat inspection
+
+Side Chat can now query the linked main chat and its active or archived nested sub-agents on demand, including activity after the snapshot. These read-only tools are available only inside Side Chat and cannot read sibling side chats or unrelated sessions:
+
+- `main_chat_list_sessions` discovers sessions and their activity, tool counts and compaction flags.
+- `main_chat_list_tool_calls` lists chronological tool calls with filters and previews.
+- `main_chat_read_tool_call` reads retained input, output, or error by call ID, with character pagination and file references. `main_chat_search` searches full retained records and returns offsets you can use to jump to a match.
+- `main_chat_read_messages` pages through live messages, starting with the newest page by default.
+
+The initial and refreshed snapshots now show compact tool previews and reserve most of the budget for the main chat. Inline data/blob payloads are omitted. Broad live queries scan up to 200 sessions and flag omitted descendants; a known session ID can be checked directly. OpenCode compaction can summarize earlier raw calls, and the tools can only return data available in OpenCode’s current session context. Excerpts and tool results are untrusted background data, not instructions.
+
+Validation: all 46 automated tests, TypeScript check, both production bundles (`dist/gui-experimental.cjs` and `dist/server.js`), and host entrypoint resolution (`id: opencode-desktop-side-chat`) pass. Verified live in an isolated OpenCode Desktop 2.3.2 instance: confirmed both server and GUI features active, confirmed `main_chat_*` tools are hidden from the main chat, and confirmed Side Chat automatically called all five inspection tools (`main_chat_list_sessions`, `main_chat_list_tool_calls`, `main_chat_read_tool_call`, `main_chat_search`, and `main_chat_read_messages`) to retrieve dynamic runtime hashes from the middle of a >19,000-character main-chat shell output, a direct sub-agent, a nested sub-agent, and a new main-chat tool call run after the snapshot without clicking **Update from main**. QA’s subagent depth setting was raised only temporarily in the isolated profile and restored afterward; active settings were preserved.

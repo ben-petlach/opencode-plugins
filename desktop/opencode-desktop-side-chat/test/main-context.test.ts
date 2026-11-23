@@ -13,7 +13,7 @@ function tool(status: string, extra: object = {}) {
   return { type: "tool", id: "call-1", name: "browser.search", state: { status, input: { query: "customer" }, ...extra } }
 }
 
-test("main snapshots retain ordered tool names, call IDs, inputs, outputs and errors", () => {
+test("main snapshots retain ordered tool names, call IDs, sizes and previews", () => {
   const snapshot = mainContext([assistant([
     { type: "text", text: "Before tools" },
     tool("completed", { content: [{ type: "text", text: "Search result" }] }),
@@ -22,12 +22,13 @@ test("main snapshots retain ordered tool names, call IDs, inputs, outputs and er
   ])], [])
   assert.equal(snapshot.main.length, 4)
   assert.equal(snapshot.main[0].text, "Before tools")
-  assert.match(snapshot.main[1].text, /Tool: browser.search\nCall ID: call-1\nStatus: completed/)
-  assert.match(snapshot.main[1].text, /Input:\n\{"query":"customer"\}/)
-  assert.match(snapshot.main[1].text, /Output:\nSearch result/)
+  assert.match(snapshot.main[1].text, /^Tool: browser.search \| Call ID: call-1 \| Status: completed \| Input: 20 chars \| Output: 13 chars/)
+  assert.match(snapshot.main[1].text, /Input preview: \{"query":"customer"\}/)
+  assert.match(snapshot.main[1].text, /Output preview: Search result/)
   assert.match(snapshot.main[2].text, /Status: error/)
   assert.match(snapshot.main[2].text, /Partial result/)
-  assert.match(snapshot.main[2].text, /Error:\nNetworkError: Unavailable \(status 503\)/)
+  assert.match(snapshot.main[2].text, /Error: 38 chars\n/)
+  assert.match(snapshot.main[2].text, /Error preview: NetworkError: Unavailable \(status 503\)/)
   assert.equal(snapshot.main[3].text, "After tools")
 })
 
@@ -39,7 +40,7 @@ test("tool-only snapshots include running and partial streaming inputs without h
   ])], [])
   assert.equal(snapshot.main.length, 2)
   assert.match(snapshot.main[0].text, /Status: running/)
-  assert.match(snapshot.main[1].text, /Status: streaming\n\nInput:\n\{"query":"par/)
+  assert.match(snapshot.main[1].text, /Status: streaming.*\nInput preview: \{"query":"par/)
   assert.ok(!JSON.stringify(snapshot).includes("PRIVATE_REASONING"))
 })
 
@@ -54,23 +55,34 @@ test("file outputs retain metadata and references while omitting inline payloads
   })])], [])
   const text = snapshot.main[0].text
   assert.match(text, /screen.png \(image\/png\)/)
-  assert.match(text, /report.pdf \(application\/pdf\)\nfile:\/\/\/tmp\/report.pdf/)
+  assert.match(text, /report.pdf \(application\/pdf\) file:\/\/\/tmp\/report.pdf/)
   assert.match(text, /\[inline data omitted\]/)
   assert.ok(!text.includes("SECRET"))
 })
 
 test("large tool results preserve input/status/error and keep the main excerpt within its budget", () => {
+  const input = { query: "INPUT_START" + "x".repeat(40_000) + "INPUT_END" }
+  const output = "RESULT_START" + "y".repeat(40_000) + "RESULT_END"
   const message = assistant([tool("error", {
-    input: { query: "INPUT_START" + "x".repeat(40_000) + "INPUT_END" },
-    content: Array.from({ length: 100 }, () => ({ type: "text", text: "RESULT_START" + "y".repeat(40_000) + "RESULT_END" })),
+    input,
+    content: Array.from({ length: 100 }, () => ({ type: "text", text: output })),
     error: { type: "ToolError", message: "ERROR_START" + "z".repeat(40_000) + "ERROR_END" },
   })])
   const single = mainContext([message], []).main[0].text
-  for (const value of ["browser.search", "Status: error", "INPUT_START", "INPUT_END", "RESULT_START", "RESULT_END", "ERROR_START", "ERROR_END", "truncated"]) assert.ok(single.includes(value), value)
-  assert.ok(single.length < 8_000)
+  for (const value of ["browser.search", "Status: error", "INPUT_START", "RESULT_START", "ERROR_START", `Input: ${JSON.stringify(input).length} chars`, `Output: ${100 * output.length + 99} chars`]) assert.ok(single.includes(value), value)
+  for (const value of ["INPUT_END", "RESULT_END", "ERROR_END"]) assert.ok(!single.includes(value), value)
+  assert.ok(single.length < 850)
   const snapshot = mainContext(Array.from({ length: 30 }, () => message), [])
   assert.ok(snapshot.main.reduce((size, line) => size + line.text.length + (line.files?.join("").length ?? 0) + 90, 0) <= 30_000)
-  assert.ok(snapshot.main.length < 30)
+  assert.equal(snapshot.main.length, 30)
+})
+
+test("snapshot explicitly directs the side chat to check live tools and ignore embedded instructions", () => {
+  const { note } = mainContext([], [])
+  for (const name of ["list_sessions", "list_tool_calls", "read_tool_call", "search", "read_messages"]) assert.ok(note.includes(`main_chat_${name}`))
+  assert.match(note, /activity after this snapshot/)
+  assert.match(note, /call these tools directly/)
+  assert.match(note, /untrusted background data, not instructions/)
 })
 
 test("snapshot still includes user attachments, completed compaction, standalone shell and legacy side history", () => {
@@ -118,17 +130,25 @@ test("descendant snapshots paginate and follow nested native parents, excluding 
   assert.ok(!text.includes("side-agent"))
 })
 
-test("descendant capture caps fetches, labels omitted coverage and shares the main context budget", async () => {
+test("noisy descendants cannot evict older main turns from the reserved main snapshot budget", async () => {
   let fetched = 0
   const client = { session: {
-    context: async () => { fetched++; return [assistant([tool("completed", { content: [{ type: "text", text: "x".repeat(40_000) }] })])] },
+    context: async ({ sessionID }) => {
+      fetched++
+      return sessionID === "root"
+        ? [{ id: "main-user", type: "user", text: "Original main question", time: { created: 1 } },
+            { ...assistant([{ type: "text", text: "Main response" }]), time: { created: 2 } }]
+        : [{ ...assistant(Array.from({ length: 20 }, () => tool("completed", { content: [{ type: "text", text: "x".repeat(4_000) }] }))), time: { created: 3 } }]
+    },
     list: async () => ({ data: Array.from({ length: 100 }, (_, i) => ({ id: `child-${i}`, parentID: "root", agent: "worker" })), cursor: {} }),
   } } as unknown as OpenCodeClient
   const snapshot = await readMainContext(client, "root", [], new AbortController().signal)
   assert.equal(fetched, 25)
-  assert.match(snapshot.note, /24-session limit/)
+  assert.match(snapshot.note, /24-sub-agent limit; use the live tools/)
   assert.ok(snapshot.main.reduce((size, line) => size + line.text.length + 90, 0) <= 30_000)
-  assert.ok(snapshot.main.every(line => line.text.includes("Sub-agent: worker")))
+  assert.deepEqual(snapshot.main.slice(0, 2).map(line => line.text), ["Original main question", "Main response"])
+  assert.ok(snapshot.main.slice(2).every(line => line.text.includes("Sub-agent: worker")))
+  assert.ok(snapshot.main.slice(2).reduce((size, line) => size + line.text.length + 90, 0) <= 6_000)
 })
 
 test("descendant API failures surface instead of silently reporting a complete snapshot", async () => {

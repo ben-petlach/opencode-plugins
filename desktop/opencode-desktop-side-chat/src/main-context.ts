@@ -6,7 +6,7 @@ export async function readMainContext(client: OpenCodeClient, sessionID: string,
   const agents: AgentContext[] = []
   const visited = new Set([sessionID])
   const queue = [sessionID]
-  // shortcut: cap descendant fetches at 24 sessions; revisit if real snapshots need wider trees.
+  // Keep the upfront overview cheap; live inspection can scan a wider tree.
   const limit = 24
   parents: for (const parentID of queue) {
     for (const archived of [false, true]) {
@@ -28,6 +28,6 @@ export async function readMainContext(client: OpenCodeClient, sessionID: string,
     }
   }
   const snapshot = mainContext(messages, legacy, agents)
-  if (agents.length === limit) snapshot.note += ` Sub-agent capture reached its ${limit}-session limit; further descendants may be omitted.`
+  if (agents.length === limit) snapshot.note += ` The overview reached its ${limit}-sub-agent limit; use the live tools to inspect beyond it.`
   return snapshot
 }

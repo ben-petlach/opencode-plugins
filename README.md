@@ -5,7 +5,7 @@ The `desktop/` folder contains MIT-licensed plugins built for OpenCode Desktop 2
 | Plugin | Version | What it does |
 | --- | --- | --- |
 | [Follow-up suggestions](desktop/opencode-desktop-followups/) | 0.1.0 | Suggests editable next prompts based on the latest reply. Requires Google Vertex with Gemini 3.1 Flash-Lite configured in OpenCode. |
-| [Side Chat](desktop/opencode-desktop-side-chat/) | 0.2.13 | Opens independent chat tabs with context from the main chat. Share a side transcript back to the main composer as an editable draft. Side chats contribute working, unread and activity-time updates to their main chat. |
+| [Side Chat](desktop/opencode-desktop-side-chat/) | 0.2.14 | Opens independent chat tabs that can inspect main-chat and sub-agent history live. Share a side transcript back to the main composer as an editable draft. Side chats contribute working, unread and activity-time updates to their main chat. |
 | [Dock badge](desktop/opencode-dock-badge/) | 1.0.1 | Shows a macOS Dock count for unread chats and chats needing attention in Inbox and tab layouts. |
 
 ## Install

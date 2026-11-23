@@ -1,4 +1,4 @@
-# OpenCode Desktop Side Chat v0.2.12
+# OpenCode Desktop Side Chat v0.2.13
 
 Built for OpenCode Desktop 2.3.2. This directory includes the built plugin and its source.
 
@@ -94,3 +94,14 @@ Opening the parent or using native Mark read acknowledges the completed sessions
 Compatibility: the Desktop 2.3.2 adapter covers native session-summary/index reads and the viewed API, restoring them on unload. Only viewed watermarks are written to the server.
 
 Validation: all 28 automated tests pass, including nine activity/read-state tests against OpenCode's real Solid data store. Typecheck and production build pass. In an isolated Desktop 2.3.2 instance using Inbox layout, verified a live 5-second Working timer, background completion moving the parent to Unread with a fresh activity time, unread surviving a full app restart, and opening the parent moving it to Recent while persisting the side session's viewed timestamp. API checks confirmed the main session's actual busy/idle times and transcript were not used to fabricate an execution.
+
+
+## v0.2.13: main-chat and sub-agent tool context
+
+Side Chat’s initial main-chat snapshot and **Update from main** now include ordinary tool-call records in message order: tool name, call ID, status, inputs, text outputs and errors. Tool-only assistant messages are included. Standalone shell output, user attachments, completed compaction summaries and legacy side-chat history remain available. Tool results are identified as background data, not user instructions.
+
+Snapshots also fetch native child sessions recursively, including active and archived descendants. Each child record identifies its originating agent, task title, session and parent. Running agents contribute records available when captured. Side Chat sessions are excluded. Capture is capped at 24 descendants with an explicit omission notice; a failed context request surfaces an error rather than silently claiming complete coverage. Existing snapshots remain unchanged until a successful refresh.
+
+Tool inputs are limited to 2,000 characters, outputs to 4,000 per call, and errors to 1,000. Large fields retain their beginning and end with explicit truncation markers. File outputs include names, MIME types and references; inline data/blob payloads are omitted. Main and descendant records share the existing 30,000-character content budget and favor recent records. This remains an explicit snapshot, with no automatic live synchronization. Visible transcripts and sharing behavior are unchanged.
+
+Validation: all 36 automated tests pass, plus TypeScript check and production build. In a separate Desktop 2.3.2 profile, executed two real main-chat shell tool calls. Verified initial capture included actual output, later main activity left that snapshot unchanged, and **Update from main** captured both calls with an inline marker. Also executed real child and nested-child shell calls, and verified capture included both outputs, origin labels and a real delegation error. QA’s subagent depth setting was raised only in the isolated profile; the active installation’s settings were preserved. Automated tests cover pagination, archived children, repeated/cyclic links, descendant limits, error propagation, running/streaming records, file outputs and truncation.

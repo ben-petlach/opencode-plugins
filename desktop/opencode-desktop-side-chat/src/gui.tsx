@@ -11,7 +11,8 @@ import { SideComposer } from "./composer"
 import { SideMessage } from "./message"
 import { ExecutionGroup } from "./execution"
 import { timelineRows } from "./timeline"
-import { conversationLines, legacyLines, mainContext, shareText } from "./conversation"
+import { conversationLines, legacyLines, shareText } from "./conversation"
+import { readMainContext } from "./main-context"
 import styles from "./panel.css?inline"
 import { modelOptions, parseModelPreferences } from "./models"
 import { installSelectionAction } from "./selection-action"
@@ -414,14 +415,13 @@ export default Plugin.define({
 
       async function saveMainSnapshot(
         id: string,
-        context: readonly SessionMessageInfo[],
-        turns: typeof Thread.Type["turns"],
+        context: Awaited<ReturnType<typeof readMainContext>>,
         signal: AbortSignal,
       ) {
         await client.experimental.session.instructions.entry.put({
           sessionID: id,
           key: mainContextKey,
-          value: mainContext(context, turns),
+          value: context,
         }, { signal })
       }
 
@@ -431,7 +431,7 @@ export default Plugin.define({
           if (existing.agent === "plan") await client.session.switchAgent({ sessionID: thread.sessionID, agent: "build" }, { signal })
           return thread.sessionID
         }
-        const context = await client.session.context({ sessionID: session.id }, { signal })
+        const context = await readMainContext(client, session.id, thread.turns, signal)
         const parent = data.session.get(session.id)
         const created = await client.session.create({
           location: location(),
@@ -443,7 +443,7 @@ export default Plugin.define({
         data.session.remember(created)
         try {
           await client.session.update({ sessionID: created.id, archived: true }, { signal })
-          await saveMainSnapshot(created.id, context, thread.turns, signal)
+          await saveMainSnapshot(created.id, context, signal)
         } catch (error) {
           await client.session.remove({ sessionID: created.id }, { signal: AbortSignal.timeout(5_000) })
             .catch(() => undefined)
@@ -462,8 +462,8 @@ export default Plugin.define({
         if (!id || running() || syncError() || !canOpen(session)) return
         void perform(key, "updating", async () => {
           const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(60_000)])
-          const context = await client.session.context({ sessionID: session.id }, { signal })
-          await saveMainSnapshot(id, context, thread.turns, signal)
+          const context = await readMainContext(client, session.id, thread.turns, signal)
+          await saveMainSnapshot(id, context, signal)
           saved.update(current => {
             current.updates = [...(current.updates ?? []), { id: crypto.randomUUID(), afterID: messages().at(-1)?.id, time: Date.now() }]
           })

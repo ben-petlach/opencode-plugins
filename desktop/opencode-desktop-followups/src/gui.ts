@@ -1,14 +1,9 @@
-import { ComposerPill, Command, Plugin, Store, createKeyed } from "@opencode/plugin/gui"
-import type { ComposerPillProps, MountedSession } from "@opencode/plugin/gui"
+import { ComposerPill, Command, Plugin, Store } from "@opencode/plugin/gui"
+import type { ComposerPillProps } from "@opencode/plugin/gui"
 import { Schema } from "effect"
 import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js"
 import { buildPrompt, matchesDraft, type Prediction } from "./model"
 import { createSuggestions } from "./request"
-
-function latestMessageID(session: MountedSession) {
-  return session.server.data.session.message.list(session.id)
-    ?.findLast((message) => message.type === "assistant" || message.type === "user")?.id
-}
 
 function attachTooltip(button: HTMLButtonElement, text: string) {
   const tooltip = document.createElement("div")
@@ -64,35 +59,40 @@ function attachTooltip(button: HTMLButtonElement, text: string) {
 }
 
 export default Plugin.define({
-  stores: { prefs: Store.global(Schema.Struct({ enabled: Schema.Boolean }), { enabled: true }) },
+  stores: {
+    prefs: Store.global(Schema.Struct({ enabled: Schema.Boolean }), { enabled: true }),
+    dismissal: Store.session(Schema.Struct({ turnID: Schema.NullOr(Schema.String) }), { turnID: null }),
+  },
   setup(ctx) {
     const [visible, setVisible] = createSignal(document.visibilityState === "visible")
     const updateVisibility = () => setVisible(document.visibilityState === "visible")
     document.addEventListener("visibilitychange", updateVisibility)
 
-    const cache = new Map<string, { messageID: ReturnType<typeof latestMessageID>; prediction: Prediction }>()
+    const messages = createMemo(() => {
+      const session = ctx.sessions.current()
+      return session?.server.data.session.message.list(session.id)
+    })
+    const latest = createMemo(() =>
+      messages()?.findLast((message) => message.type === "idle" || message.type === "assistant" || message.type === "user"))
+    const cache = new Map<string, { turnID: string; prediction: Prediction }>()
     const [cacheVersion, updateCache] = createSignal(0)
+    const save = (sessionKey: string, turnID: string, prediction: Prediction) => {
+      cache.set(sessionKey, { turnID, prediction })
+      updateCache((version) => version + 1)
+    }
     const prediction = () => {
       cacheVersion()
       const session = ctx.sessions.current()
-      const cached = session && cache.get(session.key)
-      if (session && cached && cached.messageID === latestMessageID(session)) return cached.prediction
+      if (!session) return
+      const turn = latest()
+      const cached = cache.get(session.key)
+      if (turn && cached?.turnID === turn.id && ctx.stores.dismissal(session).value?.turnID !== turn.id) return cached.prediction
     }
     const requests = createSuggestions((result) => {
       const session = ctx.sessions.current()
-      if (session && result) {
-        cache.set(session.key, { messageID: latestMessageID(session), prediction: result })
-        updateCache((version) => version + 1)
-      }
+      const turn = latest()
+      if (session && turn && result) save(session.key, turn.id, result)
     }, (error) => console.warn("[desktop-followups] Suggestion generation failed", error))
-    const forget = (key: string) => {
-      if (cache.delete(key)) updateCache((version) => version + 1)
-    }
-    const discard = () => {
-      const key = ctx.sessions.current()?.key
-      if (key) forget(key)
-      requests.clear()
-    }
     onCleanup(() => {
       requests.clear()
       document.removeEventListener("visibilitychange", updateVisibility)
@@ -108,59 +108,61 @@ export default Plugin.define({
         !data.permission.list(session.id)?.length && !(data.form.list(session.id)?.length) &&
         !(data.form.list("global")?.length) && composer.quotable()
     })
-    createEffect(() => {
-      ctx.sessions.current()?.visit
-      const enabled = ctx.stores.prefs.value.enabled
-      untrack(() => {
-        requests.clear()
-        if (!enabled) {
-          cache.clear()
-          updateCache((version) => version + 1)
-        }
-      })
-    })
 
+    let attempted: string | undefined
     const suggest = (manual = false) => {
       const session = ctx.sessions.current()
       if (!session || !ready()) {
         if (manual) ctx.toast.show({ title: "Suggestions unavailable", description: "Wait for the reply to finish, then try again." })
         return
       }
-      const visit = session.visit
-      const messages = session.server.data.session.message.list(session.id) ?? []
-      if (!messages.some((message) => message.type === "assistant")) {
+      const history = messages() ?? []
+      const turn = latest()
+      if (!turn || !history.some((message) => message.type === "assistant")) {
         if (manual) ctx.toast.show({ title: "No assistant messages in loaded conversation" })
         return
       }
-      forget(session.key)
-      const messageID = latestMessageID(session)
-      const { prompt, openingCase } = buildPrompt(messages)
+      attempted = turn.id
+      if (manual) {
+        if (cache.delete(session.key)) updateCache((version) => version + 1)
+        const dismissal = ctx.stores.dismissal(session)
+        if (dismissal.value?.turnID === turn.id) dismissal.update((value) => { value.turnID = null })
+      }
+      const { prompt, openingCase } = buildPrompt(history)
       const model = { providerID: "google-vertex", id: "gemini-3.1-flash-lite", variant: "minimal" }
       void requests.run(
         (signal) => session.server.client.experimental.generate.text({ prompt, model }, { signal }),
-        () => ctx.sessions.current()?.visit === visit && ready() && latestMessageID(session) === messageID,
+        () => ctx.sessions.current()?.visit === session.visit && latest()?.id === turn.id,
         openingCase,
       )
     }
-    const [completion, setCompletion] = createSignal<{ id: string; visit: object }>()
-    let consumed: string | undefined
+
+    let lastVisit: object | undefined
+    let wasEnabled = false
     createEffect(() => {
-      const done = completion()
-      if (!done || !ready() || ctx.sessions.current()?.visit !== done.visit || consumed === done.id) return
-      consumed = done.id
-      untrack(() => suggest())
-    })
-    createKeyed(() => ctx.sessions.current()?.server.data, (data) => {
-      onCleanup(data.on("session.execution.started", (event) => {
-        const session = ctx.sessions.current()
-        if (session?.id !== event.data.sessionID) return
-        setCompletion(undefined)
-        discard()
-      }))
-      onCleanup(data.on("session.execution.succeeded", (event) => {
-        const session = ctx.sessions.current()
-        if (session?.id === event.data.sessionID) setCompletion({ id: event.id, visit: session.visit })
-      }))
+      const session = ctx.sessions.current()
+      const enabled = ctx.stores.prefs.value.enabled
+      const dismissal = session && ctx.stores.dismissal(session).value
+      const turn = latest()
+      const history = messages()
+      const canGenerate = ready() && visible()
+
+      untrack(() => {
+        if (session?.visit !== lastVisit || enabled !== wasEnabled) {
+          lastVisit = session?.visit
+          wasEnabled = enabled
+          attempted = undefined
+          requests.clear()
+        }
+        // The idle message persists when a session finishes outside the current view.
+        if (!canGenerate || !session || turn?.type !== "idle" || turn.outcome !== "succeeded" ||
+            !dismissal || dismissal.turnID === turn.id || attempted === turn.id ||
+            cache.get(session.key)?.turnID === turn.id) return
+
+        const reply = history?.slice(0, history.lastIndexOf(turn))
+          .findLast((message) => message.type === "assistant" || message.type === "idle" || message.type === "user")
+        if (reply?.type === "assistant" && reply.content.some((part) => part.type === "text" && part.text.trim())) suggest()
+      })
     })
 
     const currentPrediction = (input: ComposerPillProps) => {
@@ -227,7 +229,11 @@ export default Plugin.define({
             id: String(index), label: text,
             run: draft ? undefined : () => { accept(input, text) },
           })), { id: "dismiss", label: "Dismiss suggestions", run() {
-            if (ctx.sessions.current()?.visit === input.session.visit) discard()
+            const turn = latest()
+            if (turn && ctx.sessions.current()?.visit === input.session.visit) {
+              requests.clear()
+              ctx.stores.dismissal(input.session).update((value) => { value.turnID = turn.id })
+            }
           } }],
         }
       },

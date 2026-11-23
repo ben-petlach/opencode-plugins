@@ -2,7 +2,7 @@
 
 Standalone local GUI plugin for OpenCode Desktop 2.3.2. Adapted from OpenCode PR #57137, with the public experimental GUI SDK instead of patches to the app.
 
-After a successful turn in the routed session, the plugin makes one extra generation request and caches up to three replies. **Suggested next prompts** opens the menu. A clearly likely reply also appears as its own pill and leads the menu. Click a suggestion in an empty prompt or use **Tab** in the focused empty prompt to insert the primary. Sending is separate.
+After a successful turn, the plugin makes one extra generation request and caches up to three replies. Opening a chat also checks its latest completed turn for a missed or cancelled prediction. **Suggested next prompts** opens the menu. A clearly likely reply also appears as its own pill and leads the menu. Click a suggestion in an empty prompt or use **Tab** in the focused empty prompt to insert the primary. Sending is separate.
 
 - Keeps the official app and normal updater unchanged.
 - Uses `google-vertex/gemini-3.1-flash-lite#minimal` for suggestions, independently of the main chat model. There is no fallback to the main chat model.

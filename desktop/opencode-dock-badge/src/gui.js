@@ -35,8 +35,21 @@ export default Plugin.define({
         return
       }
 
-      const tabs = document.querySelectorAll("[data-slot='titlebar-tab-item'][data-status]")
-      paint(Array.from(tabs).filter(tab => COUNTED.has(tab.getAttribute("data-status"))).length)
+      const tabs = document.querySelectorAll("[data-slot='titlebar-tab-item']")
+      paint(Array.from(tabs).filter(tab => {
+        const status = tab.getAttribute("data-status")
+        if (COUNTED.has(status)) return true
+        if (status === "muted" || status === "busy" || tab.getAttribute("data-active") !== "true") return false
+        if (document.hasFocus() && !document.hidden) return false
+
+        // The selected tab hides its unread dot even when the window is in the background.
+        const session = ctx.sessions.current()
+        if (!session) return false
+        const data = session.server.data.session
+        const time = data.get(data.root(session.id))?.time
+        return time?.idle !== undefined && time.archived === undefined &&
+          (time.viewed === undefined || time.idle > time.viewed)
+      }).length)
     }
 
     scan()

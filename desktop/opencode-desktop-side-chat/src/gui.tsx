@@ -101,7 +101,7 @@ export default Plugin.define({
     createEffect(() => {
       for (const id of ctx.servers.list()) {
         const server = ctx.servers.get(id)
-        if (server) onCleanup(installSideChatActivity(server.data))
+        if (server?.connected) onCleanup(installSideChatActivity(server.data, server.client, error => report("Couldn’t load side chat activity", error)))
       }
     })
     const [activities, setActivities] = createSignal(new Map<string, Activity>())

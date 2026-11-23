@@ -1,4 +1,4 @@
-# OpenCode Desktop Side Chat v0.2.11
+# OpenCode Desktop Side Chat v0.2.12
 
 Built for OpenCode Desktop 2.3.2. This directory includes the built plugin and its source.
 
@@ -83,3 +83,14 @@ The `@` picker now includes the main composer's skills, non-primary visible agen
 Selections remain draft chips until you send. Skills and agents use the native request fields, references use their actual paths and display names, and chat mentions use stable `@session:` tokens. Mention spans refer to the exact sent text. These fields also work with session slash commands. Older string-based file mentions remain readable, and selected context survives closing/reopening side tabs.
 
 Validation: all 23 automated tests, typecheck and production build pass. In a separate desktop profile, compared all 15 Slack skill entries and their order with the native main picker, selected Slack without sending, reopened the saved draft, then verified the submitted message contained the real `slack--slack` skill and its mention span. The isolated test returned `MENTION_QA` without tool calls. No Slack messages were sent.
+
+
+## v0.2.12: completed activity and unread state
+
+Side-chat completions now update the parent's native unread state and last-activity time. While any main/side run is active, the Working card uses the earliest current run's start for its elapsed timer; completing one side chat does not reset a still-running sibling's timer. The latest completed run supplies the parent's displayed result and completion time.
+
+Opening the parent or using native Mark read acknowledges the completed sessions through OpenCode's `session.view` API with each session's actual observed idle timestamp. A newer completion stays unread if it arrives during that request. The viewed state persists on the side sessions, and archived side-chat metadata loads on connection so closed tabs retain unread state and recency after restart. No synthetic parent execution or transcript message is created, and costs and real parent links remain independent.
+
+Compatibility: the Desktop 2.3.2 adapter covers native session-summary/index reads and the viewed API, restoring them on unload. Only viewed watermarks are written to the server.
+
+Validation: all 28 automated tests pass, including nine activity/read-state tests against OpenCode's real Solid data store. Typecheck and production build pass. In an isolated Desktop 2.3.2 instance using Inbox layout, verified a live 5-second Working timer, background completion moving the parent to Unread with a fresh activity time, unread surviving a full app restart, and opening the parent moving it to Recent while persisting the side session's viewed timestamp. API checks confirmed the main session's actual busy/idle times and transcript were not used to fabricate an execution.

@@ -1,0 +1,41 @@
+{
+  "name": "opencode-dock-badge",
+  "version": "1.0.1",
+  "description": "macOS Dock badge for unread and attention-needed OpenCode Desktop sessions.",
+  "license": "MIT",
+  "author": "wuwu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ben-petlach/opencode-plugins.git",
+    "directory": "desktop/opencode-dock-badge"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "opencode-desktop",
+    "dock-badge",
+    "notification",
+    "macos"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./gui-experimental": "./dist/gui-experimental.cjs"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.3.2",
+    "effect": "4.1.0",
+    "solid-js": "1.9.20",
+    "vite": "7.3.8",
+    "vite-plugin-solid": "2.11.17"
+  },
+  "private": true
+}

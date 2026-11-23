@@ -1,9 +1,13 @@
-import { ComposerPill, Command, Plugin, Store } from "@opencode/plugin/gui"
+import { ComposerPill, Command, Contract, Plugin, Store } from "@opencode/plugin/gui"
 import type { ComposerPillProps } from "@opencode/plugin/gui"
 import { Schema } from "effect"
 import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js"
 import { buildPrompt, matchesDraft, type Prediction } from "./model"
 import { createSuggestions } from "./request"
+import type { FollowupsService } from "./service"
+
+const SUGGESTION_MODEL = { providerID: "google-vertex", id: "gemini-3.1-flash-lite", variant: "minimal" } as const
+const reportGenerationError = (error: unknown) => console.warn("[desktop-followups] Suggestion generation failed", error)
 
 function attachTooltip(button: HTMLButtonElement, text: string) {
   const tooltip = document.createElement("div")
@@ -68,6 +72,60 @@ export default Plugin.define({
     const updateVisibility = () => setVisible(document.visibilityState === "visible")
     document.addEventListener("visibilitychange", updateVisibility)
 
+    const scopedCache = new Map<string, { turnID: string; prediction: Prediction }>()
+    const scopedAttempted = new Map<string, string>()
+    const scopedControllers = new Map<string, ReturnType<typeof createSuggestions>>()
+    const [scopedVersion, updateScoped] = createSignal(0)
+    const service: FollowupsService = {
+      enabled: () => ctx.stores.prefs.value.enabled,
+      acceptKeybind: () => ctx.keybinds.keybind(`${ctx.id}.accept`),
+      matchesDraft,
+      get(scopeKey, turnID) {
+        scopedVersion()
+        const cached = scopedCache.get(scopeKey)
+        if (cached?.turnID === turnID) return cached.prediction
+      },
+      request(input) {
+        const { scopeKey, turnID } = input
+        if (!service.enabled() || !(input.eligible?.() ?? true)) return
+        if (!input.force && (scopedCache.get(scopeKey)?.turnID === turnID || scopedAttempted.get(scopeKey) === turnID)) return
+        if (input.force && scopedCache.delete(scopeKey)) updateScoped((version) => version + 1)
+        scopedAttempted.set(scopeKey, turnID)
+
+        let controller = scopedControllers.get(scopeKey)
+        if (!controller) {
+          controller = createSuggestions((result) => {
+            // The controller only publishes after checking the active request's turn.
+            const activeTurnID = scopedAttempted.get(scopeKey)
+            if (result && activeTurnID !== undefined) {
+              scopedCache.set(scopeKey, { turnID: activeTurnID, prediction: result })
+              updateScoped((version) => version + 1)
+            }
+          }, reportGenerationError)
+          scopedControllers.set(scopeKey, controller)
+        }
+        const { prompt, openingCase } = buildPrompt(input.messages)
+        void controller.run(
+          (signal) => input.generate(prompt, { ...SUGGESTION_MODEL }, signal),
+          () => service.enabled() && (input.eligible?.() ?? true) && scopedAttempted.get(scopeKey) === turnID,
+          openingCase,
+        )
+      },
+      cancel(scopeKey, options) {
+        scopedControllers.get(scopeKey)?.clear()
+        scopedControllers.delete(scopeKey)
+        scopedAttempted.delete(scopeKey)
+        if (options?.clearCache && scopedCache.delete(scopeKey)) updateScoped((version) => version + 1)
+      },
+    }
+    ctx.provide(Contract.define<FollowupsService, string>(`${ctx.id}.suggestions`), service)
+    const cancelScoped = () => {
+      for (const scopeKey of scopedControllers.keys()) service.cancel(scopeKey)
+    }
+    createEffect(() => {
+      if (!service.enabled()) untrack(cancelScoped)
+    })
+
     const messages = createMemo(() => {
       const session = ctx.sessions.current()
       return session?.server.data.session.message.list(session.id)
@@ -92,9 +150,11 @@ export default Plugin.define({
       const session = ctx.sessions.current()
       const turn = latest()
       if (session && turn && result) save(session.key, turn.id, result)
-    }, (error) => console.warn("[desktop-followups] Suggestion generation failed", error))
+    }, reportGenerationError)
     onCleanup(() => {
       requests.clear()
+      cancelScoped()
+      scopedCache.clear()
       document.removeEventListener("visibilitychange", updateVisibility)
     })
 
@@ -129,9 +189,8 @@ export default Plugin.define({
         if (dismissal.value?.turnID === turn.id) dismissal.update((value) => { value.turnID = null })
       }
       const { prompt, openingCase } = buildPrompt(history)
-      const model = { providerID: "google-vertex", id: "gemini-3.1-flash-lite", variant: "minimal" }
       void requests.run(
-        (signal) => session.server.client.experimental.generate.text({ prompt, model }, { signal }),
+        (signal) => session.server.client.experimental.generate.text({ prompt, model: { ...SUGGESTION_MODEL } }, { signal }),
         () => ctx.sessions.current()?.visit === session.visit && latest()?.id === turn.id,
         openingCase,
       )

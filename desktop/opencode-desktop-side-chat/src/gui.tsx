@@ -5,7 +5,7 @@ import {
   type MountedSession, type PanelProps, type PanelTab,
 } from "@opencode/plugin/gui"
 import { Schema } from "effect"
-import { createEffect, createMemo, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js"
 import { INLINE_BYTES, prepareFiles, type Upload } from "./attachments"
 import { SideComposer } from "./composer"
 import { SideMessage } from "./message"
@@ -18,9 +18,13 @@ import { readMainContext } from "./main-context"
 import styles from "./panel.css?inline"
 import { modelOptions, parseModelPreferences } from "./models"
 import { installSelectionAction } from "./selection-action"
-import { quoteDraft } from "./selection-text"
+import { appendQuote, MAX_QUOTE_LENGTH, quoteDraft } from "./selection-text"
+import { SideSelectionQuote } from "./side-selection-quote"
+import { filterPrediction, FollowupsContract, hasAssistantReply, latestTurn, shouldAutoSuggest, withLegacyMessages, type FollowupsService } from "./followups"
 import { installSideChatActivity } from "./activity"
 import { ContextMention, mentionKey, mentionPayload } from "./mentions"
+import { hasRunningDescendant, markSeenIdle, sideTabStatus, type SideTabStatus } from "./unread"
+import { buildTitlePrompt, firstNamingPrompt, isPlaceholderTitle, parseGeneratedTitle, resolveSideChatTitle } from "./titles"
 
 const ModelPreferences = Ipc.define({
   id: "opencode-desktop-side-chat.models",
@@ -34,6 +38,8 @@ const Thread = Schema.Struct({
   draft: Schema.String,
   mentions: Schema.optional(Schema.Array(Schema.Union([Schema.String, ContextMention]))),
   sessionID: Schema.optional(Schema.String),
+  dismissedTurnID: Schema.optional(Schema.NullOr(Schema.String)),
+  tabViewedIdle: Schema.optional(Schema.Number),
   model: Schema.optional(Model),
   updates: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.String, afterID: Schema.optional(Schema.String), time: Schema.Number }))),
 })
@@ -102,6 +108,16 @@ export default Plugin.define({
     chats: Store.session(Catalog, { items: [{ id: "main", title: "Side chat 1" }], active: "main" }),
   },
   setup(ctx) {
+    const followupsLive = ctx.use(FollowupsContract)
+    const followups = () => {
+      const live = followupsLive()
+      return live.status === "active" ? live.value : undefined
+    }
+    const [visible, setVisible] = createSignal(document.visibilityState === "visible")
+    const updateVisibility = () => setVisible(document.visibilityState === "visible")
+    document.addEventListener("visibilitychange", updateVisibility)
+    onCleanup(() => document.removeEventListener("visibilitychange", updateVisibility))
+
     createEffect(() => {
       for (const id of ctx.servers.list()) {
         const server = ctx.servers.get(id)
@@ -111,6 +127,7 @@ export default Plugin.define({
     const [activities, setActivities] = createSignal(new Map<string, Activity>())
     const [uploads, setUploads] = createSignal(new Map<string, Upload[]>())
     const tabs = new Map<string, PanelTab>()
+    const titleAttempted = new Set<string>()
     const panelKey = (id: string) => `${ctx.id}:${id}`
     const editorID = (session: MountedSession, chatID: string) => `oc-side-editor-${session.id}-${chatID}`
     const owner = getOwner()!
@@ -133,6 +150,27 @@ export default Plugin.define({
         threads.set(key, saved)
       }
       return saved
+    }
+
+    function tabTitle(session: MountedSession, chatID: string, catalogTitle?: string): string {
+      const id = threadStore(session, chatID).value?.sessionID
+      const sessionTitle = id ? session.server.data.session.get(id)?.title : undefined
+      const savedCatalogTitle = catalogTitle ?? catalogStore(session).value?.items.find(item => item.id === chatID)?.title
+      return resolveSideChatTitle({ sessionTitle, catalogTitle: savedCatalogTitle, fallback: "Side chat" })
+    }
+
+    function tabStatus(session: MountedSession, chatID: string): SideTabStatus {
+      const active = activities().get(`${session.key}:${chatID}`)
+      if (active === "sending" || active === "stopping") return "working"
+      const thread = threadStore(session, chatID).value
+      const id = thread?.sessionID
+      if (!id) return "idle"
+      const data = session.server.data.session
+      const info = data.get(id)
+      const running = data.status(id) === "running" ||
+        (data.pending.list(id)?.some(item => data.pending.status(id, item.id) === "starting") ?? false)
+      const hasActiveWorkers = !running && hasRunningDescendant(data.list() ?? [], id, childID => data.status(childID) === "running")
+      return sideTabStatus({ running, hasActiveWorkers, idle: info?.time.idle, viewed: info?.time.viewed, tabViewedIdle: thread.tabViewedIdle })
     }
 
     function openChat(session: MountedSession, chatID?: string) {
@@ -212,14 +250,16 @@ export default Plugin.define({
       const key = `${session.key}:${chatID}`
       const saved = threadStore(session, chatID)
       const catalog = catalogStore(session)
-      const title = () => catalog.value?.items.find(item => item.id === chatID)?.title ?? "Side chat"
+      const catalogTitle = () => catalog.value?.items.find(item => item.id === chatID)?.title
       const location = () => session.location ?? { directory: session.directory }
-      const sideID = () => saved.value?.sessionID
+      const sideID = createMemo(() => saved.value?.sessionID)
       const [syncError, setSyncError] = createSignal(false)
       const [refresh, setRefresh] = createSignal(0)
       const [lastSubmitted, setLastSubmitted] = createSignal(0)
       const [messages, setMessages] = createSignal<SessionMessageInfo[]>([])
       const [olderCursor, setOlderCursor] = createSignal<string>()
+      let titleRequest: AbortController | undefined
+      onCleanup(() => titleRequest?.abort())
       let scroller: HTMLDivElement | undefined
       let transcript: HTMLDivElement | undefined
       let followOutput = true
@@ -308,6 +348,12 @@ export default Plugin.define({
         return current ? `${providerName(current.providerID)} / ${selectedModel()?.name ?? current.id}` : "Choose model"
       }
       const commands = () => (data.location.command.list(location()) ?? []).filter(item => !reservedCommands.has(item.name.toLowerCase()))
+      const composerCommands = () => {
+        const list = commands()
+        return followups() && !list.some(command => command.name.toLowerCase() === "suggest-next")
+          ? [...list, { name: "suggest-next", description: "Suggest next prompts" }]
+          : list
+      }
       const draftUploads = () => uploads().get(key) ?? []
       const newestError = () => {
         if (running()) return undefined
@@ -349,9 +395,107 @@ export default Plugin.define({
       })
 
       createEffect(on(sideID, () => {
+        titleRequest?.abort()
         setMessages([])
         setOlderCursor(undefined)
       }))
+
+      const scopeKey = createMemo(() => {
+        const id = sideID()
+        return id ? `${server.id}\n${id}` : undefined
+      })
+      const panelVisible = createMemo(() => visible() && ctx.sessions.current()?.visit === session.visit &&
+        ctx.layout.state(panelKey(chatID), session) === "visible")
+      const viewedIdle = createMemo(() => panelVisible() && saved.ready() && !working() ? side()?.time.idle : undefined)
+      createEffect(() => {
+        const idle = viewedIdle()
+        if (idle !== undefined && idle > (saved.value?.tabViewedIdle ?? -1)) {
+          saved.update(thread => { thread.tabViewedIdle = markSeenIdle(thread.tabViewedIdle, idle) })
+        }
+      })
+      createEffect(() => {
+        const idle = viewedIdle()
+        const id = sideID()
+        if (id && idle !== undefined && idle > (side()?.time.viewed ?? -1)) {
+          void client.session.view({ sessionID: id, idle }).catch(() => undefined)
+        }
+      })
+      const followupsReady = createMemo(() => !!followups()?.enabled() && !!sideID() && saved.ready() &&
+        server.connected && !syncError() && !activity() && !working() && !permissions().length && !forms().length)
+      const activeScope = createMemo(() => followupsReady() && panelVisible() ? scopeKey() : undefined)
+      const currentTurn = createMemo(() => latestTurn(messages()))
+      const draft = () => saved.value?.draft ?? ""
+      const prediction = createMemo(() => {
+        const service = followups()
+        const scope = activeScope()
+        const turn = currentTurn()
+        if (service && scope && turn && saved.value?.dismissedTurnID !== turn.id && !draft().startsWith("!")) {
+          return service.get(scope, turn.id)
+        }
+      })
+      const matchingPrediction = createMemo(() => {
+        const service = followups()
+        if (service) return filterPrediction(prediction(), draft(), (choice, value) => service.matchesDraft(choice, value))
+      })
+      const autoTurnID = createMemo(() => {
+        const turn = currentTurn()
+        if (turn && saved.value?.dismissedTurnID !== turn.id && shouldAutoSuggest(messages())) return turn.id
+      })
+
+      function requestFollowups(service: FollowupsService, scope: string, turnID: string, force = false) {
+        service.request({
+          scopeKey: scope,
+          turnID,
+          messages: withLegacyMessages(saved.value?.turns ?? [], messages()),
+          generate: (prompt, model, signal) => client.experimental.generate.text({ prompt, model }, { signal }),
+          eligible: () => followups() === service && activeScope() === scope && currentTurn()?.id === turnID,
+          force,
+        })
+      }
+
+      createEffect(on([followups, activeScope], ([service, scope]) => {
+        if (service && scope) onCleanup(() => service.cancel(scope))
+      }))
+      createEffect(on([followups, activeScope, autoTurnID], ([service, scope, turnID]) => {
+        if (service && scope && turnID) requestFollowups(service, scope, turnID)
+      }))
+
+      function focusDraftEnd() {
+        queueMicrotask(() => {
+          if (ctx.sessions.current()?.visit !== session.visit) return
+          const editor = document.getElementById(editorID(session, chatID)) as HTMLTextAreaElement | null
+          if (!editor) return
+          editor.focus()
+          editor.setSelectionRange(editor.value.length, editor.value.length)
+        })
+      }
+
+      function acceptFollowup(text: string) {
+        const options = matchingPrediction()
+        if (draft() !== "" || !options || (options.primary !== text && !options.choices.includes(text))) return
+        saved.update(thread => { if (thread.draft === "") thread.draft = text })
+        focusDraftEnd()
+      }
+
+      function dismissFollowups() {
+        const scope = activeScope()
+        const turn = currentTurn()
+        if (!scope || !turn) return
+        saved.update(thread => { thread.dismissedTurnID = turn.id })
+        followups()?.cancel(scope)
+      }
+
+      function quoteIntoDraft(text: string) {
+        if (text.length > MAX_QUOTE_LENGTH) {
+          report("Selection too long", "Select up to 20,000 characters.")
+          return
+        }
+        saved.update(thread => {
+          const next = appendQuote(thread.draft, text)
+          if (next !== undefined) thread.draft = next
+        })
+        focusDraftEnd()
+      }
 
       createEffect(() => {
         const id = sideID()
@@ -387,6 +531,56 @@ export default Plugin.define({
         onCleanup(() => {
           window.clearInterval(timer)
           controller.abort()
+        })
+      })
+
+      function saveCatalogTitle(title: string) {
+        if (catalogTitle() === title) return
+        catalog.update(current => {
+          const entry = current.items.find(item => item.id === chatID)
+          if (entry) entry.title = title
+        })
+      }
+
+      createEffect(() => {
+        const serverTitle = side()?.title?.trim()
+        if (serverTitle && !isPlaceholderTitle(serverTitle)) saveCatalogTitle(serverTitle)
+      })
+
+      createEffect(() => {
+        const id = sideID()
+        const active = activity()
+        if (!id || !saved.ready() || !server.connected || working() || syncError() ||
+            active === "sending" || active === "stopping" ||
+            !isPlaceholderTitle(side()?.title) || !isPlaceholderTitle(catalogTitle())) return
+        const key = `${server.id}\n${id}`
+        if (titleAttempted.has(key)) return
+        const source = firstNamingPrompt(messages(), saved.value?.turns)
+        if (!source) return
+        titleAttempted.add(key)
+        const controller = new AbortController()
+        titleRequest = controller
+        const signal = AbortSignal.any([controller.signal, ctx.signal, AbortSignal.timeout(15_000)])
+        const stillUntitled = () => !signal.aborted && sideID() === id &&
+          isPlaceholderTitle(data.session.get(id)?.title) && isPlaceholderTitle(catalogTitle())
+        void (async () => {
+          const result = await client.experimental.generate.text({ prompt: buildTitlePrompt(source) }, { signal })
+          const title = parseGeneratedTitle(result.text)
+          if (!title || !stillUntitled()) return
+          const current = await client.session.get({ sessionID: id }, { signal })
+          if (!stillUntitled()) return
+          const serverTitle = current.title?.trim()
+          if (serverTitle && !isPlaceholderTitle(serverTitle)) {
+            saveCatalogTitle(serverTitle)
+            return
+          }
+          await client.session.update({ sessionID: id, title }, { signal }).catch(() => undefined)
+          if (!signal.aborted && sideID() === id && isPlaceholderTitle(catalogTitle())) {
+            const latest = data.session.get(id)?.title?.trim()
+            saveCatalogTitle(latest && !isPlaceholderTitle(latest) ? latest : title)
+          }
+        })().catch(() => undefined).finally(() => {
+          if (titleRequest === controller) titleRequest = undefined
         })
       })
 
@@ -454,10 +648,8 @@ export default Plugin.define({
           return thread.sessionID
         }
         const context = await readMainContext(client, session.id, thread.turns, signal)
-        const parent = data.session.get(session.id)
         const created = await client.session.create({
           location: location(),
-          title: `${title()} · ${parent?.title || "Session"}`.slice(0, 140),
           model,
           agent: "build",
           metadata: { desktopSideChatParent: session.id, desktopSideChatID: chatID },
@@ -497,8 +689,27 @@ export default Plugin.define({
         const thread = saved.value
         const attached = draftUploads()
         const text = thread?.draft.trim() ?? ""
-        if (!thread || running() || syncError() || !canOpen(session)
-          || !(text || thread.mentions?.length || attached.length)) return
+        if (!thread || !canOpen(session)) return
+        if (text.toLowerCase() === "/suggest-next") {
+          const service = followups()
+          if (service) {
+            const scope = activeScope()
+            const turn = currentTurn()
+            batch(() => {
+              saved.update(current => { if (current.draft === thread.draft) current.draft = "" })
+              if (!scope) {
+                ctx.toast.show({ title: "Suggestions unavailable", description: "Wait for the reply to finish, then try again." })
+              } else if (!turn || !hasAssistantReply(messages())) {
+                ctx.toast.show({ title: "No assistant messages in loaded conversation" })
+              } else {
+                if (thread.dismissedTurnID === turn.id) saved.update(current => { current.dismissedTurnID = null })
+                requestFollowups(service, scope, turn.id, true)
+              }
+            })
+            return
+          }
+        }
+        if (running() || syncError() || !(text || thread.mentions?.length || attached.length)) return
 
         const slash = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(text)
         if (slash && reservedCommands.has(slash[1].toLowerCase())) {
@@ -525,6 +736,7 @@ export default Plugin.define({
           const effectiveModel = selected ?? (fallback && { providerID: fallback.providerID, id: fallback.id })
           if (!effectiveModel) throw new Error("Choose an available side chat model.")
           const id = await ensureSideSession(thread, effectiveModel, signal)
+          const previousIdle = data.session.get(id)?.time.idle ?? 0
           const sideModel = data.session.get(id)?.model
           if (modelKey(sideModel) !== modelKey(effectiveModel) || sideModel?.variant !== effectiveModel.variant) {
             await client.session.switchModel({ sessionID: id, model: effectiveModel }, { signal })
@@ -544,6 +756,7 @@ export default Plugin.define({
             if (current.draft === thread.draft) current.draft = ""
             const sentMentions = new Set((thread.mentions ?? []).map(mentionKey))
             current.mentions = current.mentions?.filter(item => !sentMentions.has(mentionKey(item)))
+            current.tabViewedIdle = markSeenIdle(current.tabViewedIdle, previousIdle)
           })
           setLastSubmitted(Date.now())
         })
@@ -612,7 +825,14 @@ export default Plugin.define({
         <section class="oc-side-chat" aria-label="Side chat">
           <header class="oc-side-header oc-side-header-compact">
             <ui.Menu label="Side chats" icon="speech-bubble" placement="bottom-start" items={[
-              ...(catalog.value?.items ?? []).map(item => ({ label: item.title, onSelect: () => openChat(session, item.id) })),
+              ...(catalog.value?.items ?? []).map(item => {
+                const name = tabTitle(session, item.id, item.title)
+                const status = tabStatus(session, item.id)
+                return {
+                  label: status === "working" ? `${name} · Working` : status === "unread" ? `● ${name}` : name,
+                  onSelect: () => openChat(session, item.id),
+                }
+              }),
               { type: "separator" },
               { label: "New side chat", icon: "plus", onSelect: () => newChat(session) },
             ]} />
@@ -654,10 +874,7 @@ export default Plugin.define({
                   <Show when={row(id).type === "message" ? row(id) as Extract<ReturnType<typeof rows>[number], { type: "message" }> : undefined}>{item =>
                     <SideMessage ctx={ctx} line={item().line} messages={messages()}
                       modelName={(provider, modelID) => models().find(model => model.providerID === provider && model.id === modelID)?.name ?? modelID}
-                      quote={text => {
-                        saved.update(thread => { thread.draft = [thread.draft, text.split("\n").map(line => `> ${line}`).join("\n")].filter(Boolean).join("\n\n") + "\n\n" })
-                        queueMicrotask(() => document.getElementById(editorID(session, chatID))?.focus())
-                      }} />
+                      quote={quoteIntoDraft} />
                   }</Show>
                 </>}</For>
                 <Show when={activity() === "sending" || activity() === "stopping" || running()}>
@@ -667,6 +884,7 @@ export default Plugin.define({
               </Show>
             </div>
           </div>
+          <SideSelectionQuote ctx={ctx} container={() => scroller} onQuote={quoteIntoDraft} />
           <For each={permissions()}>{request => (
             <div class="oc-side-request">
               <p>Allow <b>{request.action}</b>?</p>
@@ -698,16 +916,21 @@ export default Plugin.define({
             ctx={ctx}
             session={session}
             editorID={editorID(session, chatID)}
-            draft={saved.value?.draft ?? ""}
+            draft={draft()}
             mentions={saved.value?.mentions ?? []}
             uploads={draftUploads()}
             modelLabel={modelLabel()}
             model={selectedModel()}
             variantLabel={model()?.variant ?? "Default"}
-            commands={commands()}
+            commands={composerCommands()}
             disabled={!saved.ready() || syncError() || !!activity()}
             preparing={activity() === "sending" || activity() === "stopping"}
             running={working() || activity() === "stopping"}
+            followupPrimary={matchingPrediction()?.primary}
+            followupChoices={matchingPrediction()?.choices}
+            followupAcceptKeys={followups()?.acceptKeybind()}
+            onAcceptFollowup={acceptFollowup}
+            onDismissFollowups={dismissFollowups}
             onDraft={value => saved.update(thread => { thread.draft = value })}
             onMention={mention => saved.update(thread => {
               if (!thread.mentions?.some(item => mentionKey(item) === mentionKey(mention))) thread.mentions = [...(thread.mentions ?? []), mention]
@@ -771,7 +994,31 @@ export default Plugin.define({
         return items.filter(item => open.includes(item.id)).map(item => {
           const key = `${session.key}:${item.id}`
           let tab = tabs.get(key)
-          if (!tab) { tab = { id: item.id, title: item.title, closable: "compact", fallback: true }; tabs.set(key, tab) }
+          if (!tab) {
+            tab = {
+              id: item.id,
+              get title() { return tabTitle(session, item.id) },
+              closable: "compact", fallback: true,
+              label: state => {
+                const name = () => tabTitle(state.session, item.id)
+                const status = createMemo(() => tabStatus(state.session, item.id))
+                return (
+                  <span class="oc-side-tab-label" title={name()}>
+                    <Show when={status() === "working"}>
+                      <span class="oc-side-tab-working" role="status" aria-label="Working" title="Working">
+                        <ctx.ui.Loader size="small" />
+                      </span>
+                    </Show>
+                    <span class="oc-side-tab-title">{name()}</span>
+                    <Show when={status() === "unread"}>
+                      <span class="oc-side-tab-unread" role="img" aria-label="Unread" title="Unread response" />
+                    </Show>
+                  </span>
+                )
+              },
+            }
+            tabs.set(key, tab)
+          }
           return tab
         })
       },

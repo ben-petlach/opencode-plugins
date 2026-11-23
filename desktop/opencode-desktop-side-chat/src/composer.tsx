@@ -21,6 +21,11 @@ type Props = {
   disabled: boolean
   preparing: boolean
   running: boolean
+  followupPrimary?: string
+  followupChoices?: readonly string[]
+  followupAcceptKeys?: readonly string[]
+  onAcceptFollowup?: (text: string) => void
+  onDismissFollowups?: () => void
   onDraft: (text: string) => void
   onMention: (mention: Mention) => void
   onRemoveMention: (path: string) => void
@@ -57,6 +62,13 @@ export function SideComposer(props: Props) {
   const [searchError, setSearchError] = createSignal(false)
   let editor: HTMLTextAreaElement | undefined
   let picker: HTMLInputElement | undefined
+
+  createEffect(() => {
+    props.draft
+    if (!editor) return
+    editor.style.height = "auto"
+    editor.style.height = `${Math.min(editor.scrollHeight, 200)}px`
+  })
 
   const trigger = createMemo(() => focused() && !dismissed() && !props.disabled
     ? findTrigger(props.draft, caret())
@@ -193,6 +205,17 @@ export function SideComposer(props: Props) {
       take(options[selected()] ?? options[0])
       return
     }
+    const primary = props.followupPrimary
+    const keys = props.followupAcceptKeys
+    if (!menu && !props.disabled && props.draft === "" && primary && keys?.length &&
+        (props.ctx.keybinds.matches("opencode-desktop-followups.accept", event) ||
+          (keys.length === 1 && keys[0].toLowerCase() === "tab" && event.key === "Tab" &&
+            !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey))) {
+      event.preventDefault()
+      event.stopPropagation()
+      props.onAcceptFollowup?.(primary)
+      return
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
       event.stopPropagation()
@@ -220,7 +243,27 @@ export function SideComposer(props: Props) {
     </button>
   }
 
-  return (
+  return <>
+    <Show when={props.followupChoices?.length}>
+      <div class="oc-side-followups">
+        <Show when={props.followupPrimary}>{primary => (
+          <ui.Tooltip value={props.draft ? `${primary()} · Clear the draft to insert` : primary()}
+            keys={props.draft ? undefined : props.followupAcceptKeys}>
+            <button type="button" class="oc-side-followup-pill oc-side-followup-primary" disabled={!!props.draft}
+              onClick={() => props.onAcceptFollowup?.(primary())}><span>{primary()}</span></button>
+          </ui.Tooltip>
+        )}</Show>
+        <div class="oc-side-followup-menu">
+          <ui.Menu trigger="button" label="Suggested next prompts" placement="top-start" items={[
+            ...(props.followupChoices ?? []).map(text => ({
+              label: text, disabled: !!props.draft, onSelect: () => props.onAcceptFollowup?.(text),
+            })),
+            { type: "separator" },
+            { label: "Dismiss suggestions", onSelect: () => props.onDismissFollowups?.() },
+          ]} />
+        </div>
+      </div>
+    </Show>
     <form class="oc-side-compose" onSubmit={event => { event.preventDefault(); props.onSend() }}>
       <Show when={trigger()}>
         <div class="oc-side-suggestions" id={listID()} role="listbox" aria-label={trigger()?.kind === "mention" ? "Mention context" : "Side chat commands"}>
@@ -276,8 +319,6 @@ export function SideComposer(props: Props) {
         onSelect={event => setCaret(event.currentTarget.selectionStart)}
         onInput={event => {
           const input = event.currentTarget
-          input.style.height = "auto"
-          input.style.height = `${Math.min(input.scrollHeight, 200)}px`
           props.onDraft(input.value)
           setCaret(input.selectionStart)
           setDismissed(false)
@@ -333,5 +374,5 @@ export function SideComposer(props: Props) {
         </Show>
       </div>
     </form>
-  )
+  </>
 }

@@ -5,12 +5,25 @@ import vm from "node:vm"
 import * as sdk from "@opencode/plugin/gui"
 import * as solid from "solid-js"
 import * as effect from "effect"
-import { createRoot, createSignal } from "solid-js"
+import { createEffect, createRoot, createSignal } from "solid-js"
+import type { FollowupsRequest, FollowupsService } from "../src/service"
+
 const modules: Record<string, unknown> = { "@opencode/plugin/gui": sdk, "solid-js": solid, effect }
 const flush = () => new Promise((resolve) => setTimeout(resolve, 10))
+const pluginID = "opencode-desktop-followups"
+
+function loadGui(document: object, globals = {}) {
+  const exports: any = {}
+  vm.runInNewContext(readFileSync(new URL("../dist/gui-experimental.cjs", import.meta.url), "utf8"), {
+    exports, require: (id: string) => modules[id], document, console,
+    AbortController, setTimeout, clearTimeout, queueMicrotask, ...globals,
+  })
+  return exports.default
+}
 
 test("built GUI caches both controls, filters drafts, dismisses per turn, and isolates sessions", async () => {
   const registry = new Map<string, any[]>()
+  const provided = new Map<string, FollowupsService>()
   const [text, setText] = createSignal("")
   const [status, setStatus] = createSignal("idle")
   const [loaded, setLoaded] = createSignal(false)
@@ -82,20 +95,17 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
   const [current, setCurrent] = createSignal<any>(session)
   const composer = { text, quotable: () => true, insert: setText, focus: () => { focused = true }, focused: () => focused }
   const screen = { composer }
-  const exports: any = {}
-  vm.runInNewContext(readFileSync(new URL("../dist/gui-experimental.cjs", import.meta.url), "utf8"), {
-    exports, require: (id: string) => modules[id], document, window, console,
-    AbortController, MutationObserver, setTimeout, clearTimeout, queueMicrotask,
-  })
+  const plugin = loadGui(document, { window, MutationObserver })
   let dispose!: () => void
   createRoot((cleanup) => {
     dispose = cleanup
-    exports.default.setup({
+    plugin.setup({
       signal: new AbortController().signal,
-      id: "followups", keybinds: { keybind: () => ["Tab"] },
+      id: pluginID, keybinds: { keybind: () => ["Tab"] },
       stores: { prefs: { value: { enabled: true }, update() {} }, dismissal: () => dismissalStore },
       sessions: { current }, screen: { current: () => screen },
       add: (token: { id: string }, value: any) => registry.set(token.id, [...registry.get(token.id) ?? [], value]),
+      provide: (token: sdk.Contract<FollowupsService>, value: FollowupsService) => provided.set(token.id, value),
     })
   })
   const show = (id: string) => registry.get("composer-pill")?.find((pill) => pill.id === id).show({ session: current(), screen })
@@ -103,6 +113,7 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
   try {
     await flush()
     assert.equal(registry.get("composer-pill")?.length, 2)
+    assert(provided.has(`${pluginID}.suggestions`))
     assert(command("suggest"), "Commands survive startup before session data loads")
     setStatus("running")
     setLoaded(true)
@@ -230,4 +241,136 @@ test("built GUI caches both controls, filters drafts, dismisses per turn, and is
   } finally {
     dispose()
   }
+})
+
+test("built GUI provides reactive predictions and isolates, deduplicates, and cancels scoped requests", async () => {
+  const plugin = loadGui({ visibilityState: "visible", addEventListener() {}, removeEventListener() {} })
+  const [enabled, setEnabled] = createSignal(true)
+  const [keybind, setKeybind] = createSignal(["Tab"])
+  const [watchTurn, setWatchTurn] = createSignal("idle-1")
+  const calls: {
+    prompt: string
+    model: Parameters<FollowupsRequest["generate"]>[1]
+    signal: AbortSignal
+    resolve: (choice: string) => void
+  }[] = []
+  const input: FollowupsRequest = {
+    scopeKey: "side-chat/local/session",
+    turnID: "idle-1",
+    messages: [
+      { id: "user-1", type: "user", time: { created: 0 }, text: "can you explain this test" },
+      {
+        id: "assistant-1", type: "assistant", time: { created: 1 }, agent: "build",
+        model: { providerID: "test", id: "test" },
+        content: [{ type: "text", text: "It checks request cancellation." }],
+      },
+    ],
+    generate: (prompt, model, signal) => new Promise((resolve) => {
+      calls.push({ prompt, model, signal, resolve: (choice) => resolve({
+        text: JSON.stringify({ follow_ups: [choice], primary: 0 }),
+      }) })
+    }),
+  }
+  let service!: FollowupsService
+  let observedEnabled: boolean | undefined
+  let observedKeybind: readonly string[] | undefined
+  let observedPrediction: ReturnType<FollowupsService["get"]>
+  const prediction = () => observedPrediction
+  let dispose!: () => void
+  createRoot((cleanup) => {
+    dispose = cleanup
+    plugin.setup({
+      signal: new AbortController().signal,
+      id: pluginID,
+      keybinds: { keybind(id: string) { assert.equal(id, `${pluginID}.accept`); return keybind() } },
+      stores: { prefs: { get value() { return { enabled: enabled() } } } },
+      sessions: { current: () => undefined }, screen: { current: () => undefined },
+      add() {},
+      provide(token: sdk.Contract<FollowupsService>, value: FollowupsService) {
+        assert.deepEqual(token, { kind: "contract", id: "opencode-desktop-followups.suggestions" })
+        service = value
+      },
+    })
+    createEffect(() => {
+      observedEnabled = service.enabled()
+      observedKeybind = service.acceptKeybind()
+      observedPrediction = service.get(input.scopeKey, watchTurn())
+    })
+  })
+
+  try {
+    assert.equal(observedEnabled, true)
+    assert.deepEqual(observedKeybind, ["Tab"])
+    setKeybind(["Shift", "Tab"])
+    assert.deepEqual(observedKeybind, ["Shift", "Tab"])
+    assert(service.matchesDraft("Can you check?", "CAN YOU"))
+    assert(!service.matchesDraft("Can you check?", "can we"))
+    assert.equal(prediction(), undefined)
+    service.request({ ...input, eligible: () => false })
+    assert.equal(calls.length, 0, "Ineligible callers never reach the provider")
+
+    service.request(input)
+    service.request(input)
+    assert.equal(calls.length, 1, "Deduplicate in-flight requests")
+    assert.match(calls[0]!.prompt, /<latest_user_message>\s+can you explain this test\s+<\/latest_user_message>/)
+    assert.match(calls[0]!.prompt, /<latest_assistant_reply>\s+It checks request cancellation\.\s+<\/latest_assistant_reply>/)
+    assert.deepEqual({ ...calls[0]!.model }, { providerID: "google-vertex", id: "gemini-3.1-flash-lite", variant: "minimal" })
+    calls[0]!.resolve("Can you show an example?")
+    await flush()
+    assert.equal(prediction()?.primary, "can you show an example?", "Publish parsed results reactively")
+    assert.equal(service.get(input.scopeKey, "idle-2"), undefined)
+    service.request(input)
+    assert.equal(calls.length, 1, "Requests reuse cached predictions")
+
+    service.request({ ...input, force: true })
+    assert.equal(prediction(), undefined, "Force clears the cache reactively")
+    assert.equal(calls.length, 2)
+    calls[1]!.resolve("Could you review those assertions?")
+    await flush()
+    assert.equal(prediction()?.primary, "could you review those assertions?")
+
+    const next = { ...input, turnID: "idle-2" }
+    const other = { ...input, scopeKey: "side-chat/local/other" }
+    service.request(next)
+    service.request(other)
+    assert.equal(calls.length, 4)
+    service.cancel(input.scopeKey)
+    assert(calls[2]!.signal.aborted)
+    assert(!calls[3]!.signal.aborted, "Cancelling one scope leaves other scopes running")
+    assert.equal(prediction()?.primary, "could you review those assertions?", "Cancel keeps cached predictions by default")
+    calls[2]!.resolve("Stale")
+    calls[3]!.resolve("Other")
+    await flush()
+    assert.equal(service.get(next.scopeKey, next.turnID), undefined, "A cancelled result cannot publish")
+    assert.equal(service.get(other.scopeKey, other.turnID)?.primary, "Other")
+    service.request(next)
+    assert.equal(calls.length, 5, "Cancel allows retrying the same turn")
+    setWatchTurn(next.turnID)
+    calls[4]!.resolve("Recovered")
+    await flush()
+    assert.equal(prediction()?.primary, "Recovered")
+    service.cancel(next.scopeKey, { clearCache: true })
+    assert.equal(prediction(), undefined, "Opting to clear the cache updates observers")
+
+    service.request(next)
+    service.request({ ...other, turnID: "idle-2" })
+    setEnabled(false)
+    assert.equal(observedEnabled, false)
+    assert(calls[5]!.signal.aborted)
+    assert(calls[6]!.signal.aborted, "Disabling cancels every scope")
+    service.request({ ...next, force: true })
+    assert.equal(calls.length, 7, "Disabled services do not generate, even when forced")
+    calls[5]!.resolve("Disabled")
+    calls[6]!.resolve("Also disabled")
+    await flush()
+    assert.equal(prediction(), undefined)
+    setEnabled(true)
+    assert.equal(observedEnabled, true)
+    service.request(next)
+    assert.equal(calls.length, 8, "Re-enabling allows retrying an interrupted turn")
+  } finally {
+    dispose()
+    for (const call of calls) call.resolve("Cleanup")
+  }
+  assert(calls[7]!.signal.aborted, "Plugin cleanup cancels active scoped requests")
 })

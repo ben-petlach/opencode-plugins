@@ -57,8 +57,8 @@ export function SideMessage(props: {
   function quote() {
     const selection = window.getSelection()
     const text = selection?.anchorNode && selection.focusNode && article?.contains(selection.anchorNode) && article.contains(selection.focusNode)
-      ? selection.toString().trim() : ""
-    props.quote(text || props.line.text)
+      ? selection.toString() : ""
+    props.quote(text.trim() ? text : props.line.text)
   }
   return <article ref={article} class={`oc-side-message oc-side-message-${props.line.role}`} aria-label={props.line.role === "user" ? "Your message" : "Assistant response"}>
     <Show when={userFiles().some(file => file.mime.startsWith("image/"))}>

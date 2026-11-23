@@ -1,4 +1,4 @@
-# OpenCode Desktop Side Chat v0.2.15
+# OpenCode Desktop Side Chat v0.2.16
 
 Built for OpenCode Desktop 2.3.2. This directory includes the built plugin and its source.
 
@@ -9,6 +9,13 @@ Built for OpenCode Desktop 2.3.2. This directory includes the built plugin and i
 The first side message takes a snapshot of the main chat. Click **Update from main** to refresh that snapshot. Use **Share with agent** to put the side conversation in the main composer for review before sending.
 
 To rebuild from source with Node.js 22, run `npm ci --legacy-peer-deps --ignore-scripts`, `npm run check`, and `npm run build` in this plugin folder. Run the tests with `node --conditions=browser --experimental-strip-types --test test/*.test.ts`.
+
+## v0.2.16
+
+- With the compatible OpenCode Desktop Follow-ups plugin enabled, Side Chat suggests next prompts. Use `/suggest-next` to regenerate or the accept shortcut to insert a suggestion into an empty draft without sending it.
+- Select text in a side transcript and choose **Quote** to append it to that side chat’s draft.
+- Each side tab shows a spinner while it or a worker is running, then an unread dot if its response finished out of view. Opening the main chat does not clear that dot.
+- Side chats use concise titles from their first request, preferring OpenCode’s native title and falling back to a generated title when needed.
 
 ## Local model-picker update
 

@@ -11,6 +11,7 @@ After a successful turn, the plugin makes one extra generation request and cache
 - While typing, suggestions filter by case-insensitive prefix and reappear when the draft matches again. OpenCode Desktop 2.3.2 does not expose the caret or selection through its public composer API, so compatible suggestions remain previews until the prompt is empty. Dismissal lasts for the turn unless manually regenerated.
 - Provider failures and timeouts leave the composer working normally.
 - Command palette: **Suggest next prompts** (also `/suggest-next`), **Disable next-prompt suggestions** / **Enable next-prompt suggestions**.
+- Provides an in-process GUI contract (`opencode-desktop-followups.suggestions`) so companion plugins such as Side Chat reuse the same suggestion engine, model, prefix filter, global toggle, and accept keybind.
 - Additional model usage may apply. The prediction request uses your existing Google Vertex provider.
 
 ## Local installation

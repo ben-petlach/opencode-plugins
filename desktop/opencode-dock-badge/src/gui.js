@@ -7,7 +7,7 @@ export default Plugin.define({
     zh: { "command.clear": "清除 Dock 角标" },
   },
   setup(ctx) {
-    const COUNTED = new Set(["attention", "unread"])
+    const COUNTED = new Set(["attention", "unread", "failed"])
 
     let pending = 0
     const bridge = () => {

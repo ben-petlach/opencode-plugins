@@ -1,10 +1,10 @@
-import { Command, Plugin, TitlebarItem } from "@opencode/plugin/gui"
+import { Command, Plugin } from "@opencode/plugin/gui"
 import { Badge } from "./contract"
 
 export default Plugin.define({
   i18n: {
-    en: { "pill.pending": "needs you", "command.clear": "Clear Dock badge" },
-    zh: { "pill.pending": "待处理", "command.clear": "清除 Dock 角标" },
+    en: { "command.clear": "Clear Dock badge" },
+    zh: { "command.clear": "清除 Dock 角标" },
   },
   setup(ctx) {
     const COUNTED = new Set(["attention", "unread"])
@@ -43,16 +43,6 @@ export default Plugin.define({
     const timer = setInterval(scan, 1500)
     const clear = () => paint(0)
 
-    ctx.add(TitlebarItem, () =>
-      pending > 0
-        ? {
-            id: "pending",
-            label: `${pending} ${ctx.t("pill.pending")}`,
-            icon: "notifications",
-            title: ctx.t("pill.pending"),
-          }
-        : undefined,
-    )
     ctx.add(Command, () => ({
       id: "clear",
       title: ctx.t("command.clear"),

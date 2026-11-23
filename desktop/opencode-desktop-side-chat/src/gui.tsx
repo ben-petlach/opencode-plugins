@@ -1,7 +1,7 @@
 // Adapted from OpenCode PR #62169 by neriousy. See LICENSE.
 import type { ModelRef, SessionMessageInfo } from "@opencode/client"
 import {
-  Command, Ipc, MenuItem, Panel, Plugin, Store, Style,
+  Command, Ipc, MenuItem, Panel, Plugin, Slot, Store, Style,
   type MountedSession, type PanelProps, type PanelTab,
 } from "@opencode/plugin/gui"
 import { Schema } from "effect"
@@ -10,6 +10,8 @@ import { INLINE_BYTES, prepareFiles, type Upload } from "./attachments"
 import { SideComposer } from "./composer"
 import { SideMessage } from "./message"
 import { ExecutionGroup } from "./execution"
+import { WorkerCard } from "./worker-card"
+import { loadWorkers, sideChatParent, stopSideChat, syncActive } from "./workers"
 import { timelineRows } from "./timeline"
 import { conversationLines, legacyLines, shareText } from "./conversation"
 import { readMainContext } from "./main-context"
@@ -49,6 +51,7 @@ const activityErrors = {
   sending: "Couldn’t send side message",
   sharing: "Couldn’t share side chat",
   updating: "Couldn’t update from main chat",
+  stopping: "Couldn’t stop side chat",
 }
 type Activity = keyof typeof activityErrors
 
@@ -235,7 +238,7 @@ export default Plugin.define({
 
       const rows = createMemo(() => [
         ...legacyLines(saved.value?.turns ?? []).map(line => ({ type: "message" as const, id: line.id, line })),
-        ...timelineRows(messages(), saved.value?.updates ?? []),
+        ...timelineRows(messages(), saved.value?.updates ?? [], sideID() && data.session.status(sideID()!) !== "running" ? data.session.get(sideID()!)?.outcome : undefined),
       ])
       const row = (id: string) => rows().find(item => item.id === id)!
       const [success, setSuccess] = createSignal<string>()
@@ -267,6 +270,25 @@ export default Plugin.define({
           data.session.pending.status(id, item.id) === "starting",
         )
       }
+      const [workerIDs, setWorkerIDs] = createSignal<string[]>([])
+      const [workerRefresh, setWorkerRefresh] = createSignal(0)
+      const workers = () => workerIDs().map(id => data.session.get(id)).filter(Boolean)
+      const activeWorkers = () => workers().filter(worker => data.session.status(worker.id) === "running"
+        || data.session.permission.list(worker.id)?.length || data.session.form.list(worker.id, worker.location)?.length)
+      const working = () => running() || activeWorkers().length > 0
+      const offWorkers = data.on("session.created", event => {
+        if (event.data.parentID === sideID() || workerIDs().includes(event.data.parentID ?? "")) setWorkerRefresh(value => value + 1)
+      })
+      onCleanup(offWorkers)
+      createEffect(on(() => `${sideID() ?? ""}:${workerRefresh()}:${rows().filter(row => row.type === "worker").map(row => row.id).join(",")}`, () => {
+        const id = sideID()
+        if (!id) return
+        const controller = new AbortController()
+        void loadWorkers(data, client, id, controller.signal)
+          .then(ids => { setWorkerIDs(ids.slice(1)); return syncActive(data, client, ids, controller.signal) })
+          .catch(error => { if (!controller.signal.aborted) report("Couldn’t load side chat workers", error) })
+        onCleanup(() => controller.abort())
+      }))
       const model = (): ModelRef | undefined => {
         const chosen = saved.value?.model ?? side()?.model
         if (chosen) return chosen
@@ -565,8 +587,11 @@ export default Plugin.define({
 
       const stop = () => {
         const id = sideID()
-        if (id) void client.session.interrupt({ sessionID: id }, { signal: ctx.signal })
-          .catch(error => report("Couldn’t stop side response", error))
+        if (!id || activity()) return
+        void perform(key, "stopping", async () => {
+          await stopSideChat(data, client, id, AbortSignal.any([ctx.signal, AbortSignal.timeout(60_000)]))
+          setRefresh(value => value + 1)
+        })
       }
 
       async function loadEarlier() {
@@ -617,6 +642,10 @@ export default Plugin.define({
                   <Show when={row(id).type === "execution" ? row(id) as Extract<ReturnType<typeof rows>[number], { type: "execution" }> : undefined}>{item =>
                     <ExecutionGroup ctx={ctx} entries={item().entries} />
                   }</Show>
+                  <Show when={row(id).type === "worker" ? row(id) as Extract<ReturnType<typeof rows>[number], { type: "worker" }> : undefined}>{item =>
+                    <WorkerCard ctx={ctx} session={session} worker={item().worker} workers={workers()} disabled={activity() === "stopping"}
+                      modelName={(provider, modelID) => models().find(model => model.providerID === provider && model.id === modelID)?.name ?? modelID} />
+                  }</Show>
                   <Show when={row(id).type === "update" ? row(id) as Extract<ReturnType<typeof rows>[number], { type: "update" }> : undefined}>{item =>
                     <div class="oc-side-context-update" role="note"><ui.Icon name="refresh" size="small" />
                       <span>Main chat context updated</span><time dateTime={new Date(item().update.time).toISOString()}>{new Date(item().update.time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time>
@@ -631,8 +660,8 @@ export default Plugin.define({
                       }} />
                   }</Show>
                 </>}</For>
-                <Show when={activity() === "sending" || running()}>
-                  <p class="oc-side-status" role="status"><ui.Loader /> {activity() === "sending" ? "Sending…" : "Working…"}</p>
+                <Show when={activity() === "sending" || activity() === "stopping" || running()}>
+                  <p class="oc-side-status" role="status"><ui.Loader /> {activity() === "stopping" ? "Stopping…" : activity() === "sending" ? "Sending…" : "Working…"}</p>
                 </Show>
                 <Show when={newestError()}>{error => <p class="oc-side-error" role="alert">{error()}</p>}</Show>
               </Show>
@@ -658,6 +687,13 @@ export default Plugin.define({
               </div>
             </div>
           )}</For>
+          <Show when={activeWorkers().length}>
+            <div class="oc-side-worker-status" role="status">
+              <span>{activeWorkers().length} background {activeWorkers().length === 1 ? "worker" : "workers"} active</span>
+              <ui.Button type="button" variant="ghost" size="small"
+                onClick={() => ctx.tabs.open({ server: server.id, id: activeWorkers()[0].id }, { focus: true })}>View worker</ui.Button>
+            </div>
+          </Show>
           <SideComposer
             ctx={ctx}
             session={session}
@@ -670,8 +706,8 @@ export default Plugin.define({
             variantLabel={model()?.variant ?? "Default"}
             commands={commands()}
             disabled={!saved.ready() || syncError() || !!activity()}
-            preparing={activity() === "sending"}
-            running={running()}
+            preparing={activity() === "sending" || activity() === "stopping"}
+            running={working() || activity() === "stopping"}
             onDraft={value => saved.update(thread => { thread.draft = value })}
             onMention={mention => saved.update(thread => {
               if (!thread.mentions?.some(item => mentionKey(item) === mentionKey(mention))) thread.mentions = [...(thread.mentions ?? []), mention]
@@ -693,6 +729,12 @@ export default Plugin.define({
       return draft ? !!newChat(session, draft) : false
     })
     ctx.add(Style, styles)
+    ctx.add(Slot, { at: "session.header", render: input => {
+      const ui = ctx.ui
+      const parent = () => sideChatParent(input.session.server.data.session.get, input.session.id)
+      return <Show when={parent()}>{id => <ui.Button type="button" variant="ghost" size="small"
+        onClick={() => ctx.tabs.open({ server: input.session.server.id, id: id() }, { focus: true })}>Back to Side Chat</ui.Button>}</Show>
+    } })
     ctx.add(Command, (): Command => ({
       id: "open",
       title: "Open side chat",

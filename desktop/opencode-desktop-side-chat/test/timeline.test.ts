@@ -37,3 +37,29 @@ test("shell-only records group compactly; user messages form boundaries", () => 
   if (rows[0].type !== "execution") throw Error("Expected group")
   assert.equal(executionLabel(rows[0].entries), "2 Execute")
 })
+
+test("delegation is a clickable worker record, deduplicated by child session rather than launch call", () => {
+  const delegation = (id: string, description: string) => ({ type: "tool", id, name: "subagent", state: { status: "completed", input: { agent: "general", description }, metadata: { sessionID: "worker-1", status: "running" } } })
+  const rows = timelineRows([assistant("a", [delegation("call-1", "First task"), { type: "text", text: "Launched" }]), assistant("b", [delegation("call-2", "Updated task")])])
+  assert.deepEqual(rows.map(row => row.type), ["worker", "message"])
+  assert.equal(rows[0].id, "worker:worker-1")
+  if (rows[0].type !== "worker") throw Error("Expected worker")
+  assert.equal(rows[0].worker.description, "Updated task")
+})
+
+test("interrupted and failed turns cannot leave unfinished tool/thinking disclosures working", () => {
+  for (const outcome of ["interrupted", "failed"] as const) {
+    const records = [assistant("a", [tool("one", "streaming"), { type: "reasoning", text: "In progress" }]),
+      { id: "idle", type: "idle", outcome, time: { created: 2 } } as SessionMessageInfo]
+    const rows = timelineRows(records)
+    if (rows[0].type !== "execution") throw Error("Expected group")
+    assert.ok(!executing(rows[0].entries))
+    assert.deepEqual(rows[0].entries.map(entry => entry.status), [outcome, outcome])
+    const fallback = timelineRows(records.slice(0,1), [], outcome)
+    if (fallback[0].type !== "execution") throw Error("Expected group")
+    assert.ok(!executing(fallback[0].entries))
+    const next = timelineRows([...records, assistant("b", [tool("two", "running")])])
+    if (next[0].type !== "execution") throw Error("Expected group")
+    assert.equal(next[0].entries.at(-1)?.status, "running")
+  }
+})

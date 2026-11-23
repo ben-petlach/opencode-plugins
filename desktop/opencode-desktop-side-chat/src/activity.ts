@@ -1,6 +1,7 @@
 import type { OpenCodeClient, SessionInfo } from "@opencode/client"
 import type { Data } from "@opencode/client/solid"
 import { createMemo } from "solid-js"
+import { loadWorkers, syncActive } from "./workers.ts"
 
 type DesktopSessions = Data["session"] & {
   known?: Data["session"]["list"]
@@ -79,8 +80,13 @@ export function installSideChatActivity(data: Data, client: OpenCodeClient, repo
       infos.push(...page.data)
       cursor = page.cursor.next ?? undefined
     } while (cursor)
-    const sides = infos.filter(info => typeof info.metadata?.desktopSideChatParent === "string" && info.metadata.desktopSideChatParent !== info.id)
+    const sides = infos.filter(info => !info.parentID && typeof info.metadata?.desktopSideChatParent === "string" && info.metadata.desktopSideChatParent !== info.id)
     sides.forEach(data.session.remember)
+    const family = new Set<string>()
+    for (const side of sides) {
+      for (const id of await loadWorkers(data, client, side.id, controller.signal)) family.add(id)
+    }
+    if (family.size) await syncActive(data, client, [...family], controller.signal)
     for (const id of new Set(sides.map(info => info.metadata!.desktopSideChatParent as string))) {
       if (controller.signal.aborted) return
       const info = infos.find(info => info.id === id)

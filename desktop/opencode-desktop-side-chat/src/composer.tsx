@@ -327,8 +327,8 @@ export function SideComposer(props: Props) {
             <ui.IconButton icon="arrow-up" label="Send side message" variant="neutral" disabled={props.disabled || !canSend()} onClick={props.onSend} class="oc-side-send" />
           </ui.Tooltip>
         }>
-          <ui.Tooltip value="Stop response">
-            <ui.IconButton icon="stop" label="Stop side response" variant="neutral" onClick={props.onStop} class="oc-side-send" />
+          <ui.Tooltip value="Stop side chat and its workers">
+            <ui.IconButton icon="stop" label="Stop side response" variant="neutral" disabled={props.preparing} onClick={props.onStop} class="oc-side-send" />
           </ui.Tooltip>
         </Show>
       </div>

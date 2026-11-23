@@ -16,6 +16,8 @@ function check(run: (data: Data, client: OpenCodeClient, views: { sessionID: str
     const views: { sessionID: string; idle: number }[] = []
     const client = { session: {
       list: async () => ({ data: [], cursor: {} }),
+      active: async () => Object.fromEntries(data.session.active().map(id => [id, { type: "running" }])),
+      form: { list: async () => [] },
       get: async ({ sessionID }: { sessionID: string }) => JSON.parse(JSON.stringify(read(sessionID))),
       view: async (input: { sessionID: string; idle: number }) => {
         views.push(input)
@@ -24,7 +26,7 @@ function check(run: (data: Data, client: OpenCodeClient, views: { sessionID: str
         if (info.time.idle === undefined || input.idle > info.time.idle) return
         data.session.remember({ ...info, time: { ...info.time, viewed: Math.max(info.time.viewed ?? 0, input.idle) } })
       },
-    } } as unknown as OpenCodeClient
+    }, permission: { list: async () => [] } } as unknown as OpenCodeClient
     const data = createData({ api: () => client, directory: "/tmp", event: { on: () => () => {}, listen: () => () => {} } })
     read = data.session.get
     try { return Promise.resolve(run(data, client, views)).finally(dispose) }
@@ -176,6 +178,7 @@ test("archived side history hydrates across pages and desktop index readers rece
   const calls: unknown[] = []
   client.session.list = async input => {
     calls.push(input)
+    if (input?.parentID) return { data: [], cursor: {} }
     return input?.cursor ? { data: [side], cursor: {} } : { data: [main], cursor: { next: "page2" } }
   }
   const desktop = data.session as typeof data.session & { known: typeof data.session.list; apply: (infos: readonly SessionInfo[]) => SessionInfo[] }
@@ -183,11 +186,33 @@ test("archived side history hydrates across pages and desktop index readers rece
   desktop.apply = infos => [...infos]
   const uninstall = installSideChatActivity(data, client, error => { throw error })
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(calls.length, 2)
+  assert.equal(calls.filter((input: any) => !input.parentID).length, 2)
   assert.equal(data.session.get("main").time.updated, 40)
   assert.equal(unread(data.session.get("main")), false)
   assert.equal(desktop.known().find(info => info.id === "main")?.time.updated, 40)
   assert.equal(desktop.apply([main])[0].time.updated, 40)
   uninstall()
   assert.deepEqual(desktop.apply([main]), [main])
+}))
+
+test("reload hydrates inherited-metadata workers and reconciles stale interrupted activity with the server", () => check(async (data, client) => {
+  const main = { ...session("main"), time: { created: 1, updated: 10, idle: 10, viewed: 10 } }
+  const side = { ...session("side", "main"), outcome: "interrupted" as const, time: { created: 1, updated: 30, busy: 20, idle: 30, archived: 2 } }
+  const child = { ...session("worker", "main"), parentID: "side", outcome: "interrupted" as const, time: { created: 3, updated: 40, busy: 25, idle: 40 } }
+  data.session.remember(main)
+  data.session.remember(side)
+  data.session.setStatus("side", "running")
+  data.session.setStatus("worker", "running")
+  client.session.active = async () => ({})
+  client.session.list = async input => ({ data: !input?.parentID ? [side]
+    : input.parentID === "side" && !input.archived ? [child] : [], cursor: {} })
+  const uninstall = installSideChatActivity(data, client, error => { throw error })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(working(data, "main"), false)
+  assert.equal(data.session.get("worker").parentID, "side")
+  assert.equal(data.session.get("main").time.updated, 40)
+  assert.equal(data.session.get("main").outcome, "interrupted")
+  assert.equal(data.session.status("side"), "idle")
+  assert.equal(data.session.status("worker"), "idle")
+  uninstall()
 }))

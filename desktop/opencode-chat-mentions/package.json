@@ -1,0 +1,22 @@
+{
+  "name": "opencode-chat-mentions",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./dist/server.js"
+  },
+  "scripts": {
+    "build": "vite build -c vite.server.config.ts",
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@opencode/client": "2.3.2",
+    "@opencode/plugin": "2.3.2",
+    "@types/node": "24.12.2",
+    "typescript": "5.9.3",
+    "vite": "7.3.8"
+  }
+}

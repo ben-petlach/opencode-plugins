@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { SessionMessageInfo } from "@opencode/client"
-import { timelineRows, executionLabel, executing } from "../src/timeline.ts"
+import { timelineRows, executionLabel, executing, latestTurnError } from "../src/timeline.ts"
 const assistant = (id: string, content: unknown[]) => ({ id, type: "assistant", time: { created: 1 }, content }) as SessionMessageInfo
 const tool = (id: string, status = "completed") => ({ type: "tool", id, name: "shell", state: { status, input: { command: "pwd" }, content: [{ type: "text", text: "result" }] } })
 
@@ -62,4 +62,43 @@ test("interrupted and failed turns cannot leave unfinished tool/thinking disclos
     if (next[0].type !== "execution") throw Error("Expected group")
     assert.equal(next[0].entries.at(-1)?.status, "running")
   }
+})
+
+test("latestTurnError surfaces pre-assistant idle failures including provider auth errors", () => {
+  const user = (id: string, text = "hello") => ({ id, type: "user", text, time: { created: 1 } }) as SessionMessageInfo
+  const idle = (id: string, outcome: "succeeded" | "failed" | "interrupted", error?: { type: string; message: string }) =>
+    ({ id, type: "idle", outcome, ...(error ? { error } : {}), time: { created: 2 } }) as SessionMessageInfo
+
+  assert.equal(
+    latestTurnError([user("u1"), idle("i1", "failed", { type: "provider.auth", message: "Request failed: 400" })]),
+    "Provider authentication failed (Request failed: 400). Reconnect this provider in OpenCode settings.",
+  )
+  assert.equal(
+    latestTurnError([user("u1"), idle("i1", "failed", { type: "provider.transport", message: "Timed out" })]),
+    "Timed out",
+  )
+  assert.equal(
+    latestTurnError([user("u1"), idle("i1", "failed")]),
+    "Side chat request failed.",
+  )
+  assert.equal(
+    latestTurnError([
+      user("u1"),
+      { ...assistant("a1", []), error: { type: "provider.transport", message: "Upstream 502" } } as SessionMessageInfo,
+      idle("i1", "failed"),
+    ]),
+    "Upstream 502",
+  )
+  assert.equal(
+    latestTurnError([user("u1"), idle("i1", "failed", { type: "provider.auth", message: "Request failed: 400" }), user("u2")]),
+    undefined,
+  )
+  assert.equal(
+    latestTurnError([user("u1"), idle("i1", "failed", { type: "provider.auth", message: "Request failed: 400" }), user("u2"), assistant("a2", [{ type: "text", text: "ok" }]), idle("i2", "succeeded")]),
+    undefined,
+  )
+  assert.equal(
+    latestTurnError([user("u1"), assistant("a1", [{ type: "text", text: "partial" }]), idle("i1", "interrupted")]),
+    undefined,
+  )
 })

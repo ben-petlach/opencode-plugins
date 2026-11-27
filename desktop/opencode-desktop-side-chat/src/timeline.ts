@@ -1,4 +1,4 @@
-import type { SessionMessageInfo } from "@opencode/client"
+import type { SessionMessageInfo, SessionStructuredError } from "@opencode/client"
 import { conversationLines, type Line } from "./conversation.ts"
 
 export type ContextUpdate = { id: string; afterID?: string; time: number }
@@ -77,3 +77,33 @@ export function executionLabel(entries: readonly Execution[]) {
   }).join(" · ")
 }
 export const executing = (entries: readonly Execution[]) => entries.some(entry => ["running", "streaming", "pending"].includes(entry.status))
+
+function formatTurnError(error: SessionStructuredError) {
+  if (error.type === "provider.auth") {
+    return error.message
+      ? `Provider authentication failed (${error.message}). Reconnect this provider in OpenCode settings.`
+      : "Provider authentication failed. Reconnect this provider in OpenCode settings."
+  }
+  return error.message || "Side chat request failed."
+}
+
+export function latestTurnError(messages: readonly SessionMessageInfo[]): string | undefined {
+  let failedIdle = false
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.type === "idle") {
+      if (message.outcome === "succeeded") return undefined
+      if (message.error) return formatTurnError(message.error)
+      if (message.outcome === "failed") failedIdle = true
+      continue
+    }
+    if (message.type === "assistant") {
+      if (message.error) return formatTurnError(message.error)
+      return failedIdle ? "Side chat request failed." : undefined
+    }
+    if (message.type === "user" || message.type === "shell") {
+      return failedIdle ? "Side chat request failed." : undefined
+    }
+  }
+  return failedIdle ? "Side chat request failed." : undefined
+}

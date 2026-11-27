@@ -12,7 +12,7 @@ import { SideMessage } from "./message"
 import { ExecutionGroup } from "./execution"
 import { WorkerCard } from "./worker-card"
 import { loadWorkers, sideChatParent, stopSideChat, syncActive } from "./workers"
-import { timelineRows } from "./timeline"
+import { latestTurnError, timelineRows } from "./timeline"
 import { conversationLines, legacyLines, shareText } from "./conversation"
 import { readMainContext } from "./main-context"
 import styles from "./panel.css?inline"
@@ -355,11 +355,7 @@ export default Plugin.define({
           : list
       }
       const draftUploads = () => uploads().get(key) ?? []
-      const newestError = () => {
-        if (running()) return undefined
-        const last = messages().findLast(message => message.type === "assistant" || message.type === "user" || message.type === "shell")
-        if (last?.type === "assistant" && last.error) return last.error.message
-      }
+      const newestError = () => running() ? undefined : latestTurnError(messages())
 
       createEffect(() => {
         const ref = location()
@@ -500,6 +496,7 @@ export default Plugin.define({
       createEffect(() => {
         const id = sideID()
         const isRunning = running()
+        side()?.time.idle
         lastSubmitted()
         refresh()
         if (!id) return
